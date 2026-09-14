@@ -3,6 +3,7 @@ local Players = game:GetService("Players")
 local Replicator = require("@game/ReplicatedStorage/Core/Replicator")
 local Pilot = require("@game/ReplicatedStorage/Client/Plane/Pilot")
 local PlaneReplicator = require("@game/ReplicatedStorage/Client/Plane/PlaneReplicator")
+local Gui = require("@game/ReplicatedStorage/Client/Gui")
 
 local player = Players.LocalPlayer
 
@@ -40,6 +41,14 @@ end
 
 -- Client startup entry point --
 
+--[[
+	Build up the GUI instance tree with Fusion. Every registered GUI module is built
+	exactly once here at client init (see Client/Gui).
+]]
+local function startupGui(player: Player)
+	Gui.start(player)
+end
+
 local function startup()
 	-- init client systems --
 	---- replicated objects ----
@@ -50,10 +59,7 @@ local function startup()
 	--
 
 	-- init gui --
-	local playerGui = player:WaitForChild("PlayerGui")
-	local mainGui = playerGui:WaitForChild("Main")
-
-	Pilot.guiInit(mainGui)
+	startupGui(player)
 	--
 
 	-- handle player character events --

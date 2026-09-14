@@ -13,7 +13,10 @@
         "$path": "src/Modules"
       },
       "Core": {
-        "$path": "src/Core"
+        "$path": "src/Core",
+        "Fusion": {
+          "$path": "vendor/Fusion"
+        }
       },
       "Remotes": {
         "$className": "Folder",

@@ -5,7 +5,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
-local YokeCursor = require("./YokeCursor")
+local PilotHud = require("@game/ReplicatedStorage/Client/Gui/PilotHud")
 local PlaneReplicator = require("./PlaneReplicator")
 local EngineState = require("@game/ReplicatedStorage/Modules/EngineState")
 
@@ -29,11 +29,6 @@ local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local requestEngineRemote = remotes:WaitForChild("RequestEngine")
 local setThrottleRemote = remotes:WaitForChild("SetThrottle")
 
-
-local gui: {
-	pilotFrame: Frame,
-	throttleTopBar: Frame,
-}
 
 local pilotControlHeartbeat
 
@@ -65,9 +60,6 @@ function Pilot.newControl(character, humanoid, seat, args)
 	self.throttleDirty = false
 	self.lastThrottleSend = 0
 
-	-- instance gui data
-	self.yokeCursor = YokeCursor.new()
-
 	local constraintsFolder = self.model:WaitForChild("Constraints")
 	self.gearCylinder = constraintsFolder:WaitForChild("GearCylinderRear")
 	self.thrustForce = constraintsFolder:WaitForChild("Thrust")
@@ -84,8 +76,7 @@ function Pilot.newControl(character, humanoid, seat, args)
 			pilotControlHeartbeat(self, dt)
 		end)
 
-		self.yokeCursor:show()
-		Pilot.showGui()
+		PilotHud.show()
 	end
 
 	function self:destroy()
@@ -101,8 +92,7 @@ function Pilot.newControl(character, humanoid, seat, args)
 			effects:clearLocalThrottle()
 		end
 
-		self.yokeCursor:destroy()
-		Pilot.hideGui()
+		PilotHud.hide()
 	end
 
 	return self
@@ -271,7 +261,7 @@ function Pilot:updateRotationArcadeMode(dt)
 	self.angularVelocityMover.MaxTorque = if self.onGround then 0 else 9999999
 	self.angularVelocityMover.AngularVelocity = Vector3.new(-mposFromCenter.Y, -windVaneAngle * windVaneCoeff * ARCADE_WINDVANE_K, -mposFromCenter.X) * math.rad(15)
 
-	self.yokeCursor:update(mposFromCenter, viewportSize)
+	PilotHud.setYoke(mposFromCenter, viewportSize)
 end
 
 function pilotControlHeartbeat(self, dt)
@@ -297,7 +287,7 @@ function pilotControlHeartbeat(self, dt)
 	end
 
 	-- update throttle gui
-	gui.throttleTopBar.Size = UDim2.new(1, 0, self.throttle, 0)
+	PilotHud.setThrottle(self.throttle)
 	
 	-- apply ground steer
 	self.gearCylinder.TargetAngle = groundSteer * 30
@@ -323,24 +313,5 @@ end
 
 
 --
-
-function Pilot.showGui()
-	gui.pilotFrame.Visible = true
-end
-
-function Pilot.hideGui()
-	gui.pilotFrame.Visible = false
-end
-
-function Pilot.guiInit(screenGui)
-	local _gui = {}
-	_gui.pilotFrame = screenGui:WaitForChild("Pilot")
-	_gui.throttleTopBar = _gui.pilotFrame:WaitForChild("ThrottleBack"):WaitForChild("ThrottleTop")
-	gui = _gui
-	
-	YokeCursor.guiInit(_gui.pilotFrame)
-	
-	Pilot.hideGui()
-end
 
 return Pilot
