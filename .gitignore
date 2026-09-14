@@ -1,0 +1,23 @@
+# Built Roblox place / model files
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+*.rbxl.lock
+*.rbxlx.lock
+
+# Rojo generated sourcemap (regenerate with `rojo sourcemap`)
+sourcemap.json
+
+# Wally package manager
+/Packages/
+/ServerPackages/
+/DevPackages/
+wally.lock
+
+# Editor / OS
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db

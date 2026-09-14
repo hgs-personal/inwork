@@ -1,0 +1,35 @@
+{
+  "name": "Cargo Plane Game",
+  "emitLegacyScripts": false,
+
+  "tree": {
+    "$className": "DataModel",
+  
+    "ReplicatedStorage": {
+      "Client": {
+        "$path": "src/Client"
+      },
+      "Modules": {
+        "$path": "src/Modules"
+      },
+      "Core": {
+        "$path": "src/Core"
+      },
+      "Remotes": {
+        "$className": "Folder",
+        "RequestEngine": {
+          "$className": "RemoteEvent"
+        },
+        "SetThrottle": {
+          "$className": "RemoteEvent"
+        }
+      }
+    },
+
+    "ServerScriptService": {
+      "Server": {
+        "$path": "src/Server"
+      }
+    }
+  }
+}
