@@ -1,0 +1,3 @@
+[submodule "vendor/Fusion"]
+	path = vendor/Fusion
+	url = https://github.com/dphfox/Fusion.git
