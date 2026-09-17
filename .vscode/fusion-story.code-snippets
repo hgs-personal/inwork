@@ -1,0 +1,24 @@
+{
+	"UI Labs Fusion Story": {
+		"scope": "luau",
+		"prefix": ["fusionstory", "story"],
+		"description": "UI Labs story that mounts a Fusion GUI layer into the story target",
+		"body": [
+			"local Fusion = require(\"@game/ReplicatedStorage/Core/Fusion\")",
+			"",
+			"local ${1:${TM_FILENAME_BASE/(.*)\\.story$/$1/}} = require(\"./${1}\")",
+			"",
+			"return {",
+			"\tfusion = Fusion,",
+			"\tstory = function(props)",
+			"\t\tlocal scope = props.scope :: Fusion.Scope",
+			"\t\tlocal ${2:layer} = ${1}.new(scope)",
+			"\t\tscope:Hydrate(props.target)({",
+			"\t\t\t[Fusion.Children] = ${2}.mount(scope)",
+			"\t\t})",
+			"\tend,",
+			"}",
+			""
+		]
+	}
+}
