@@ -4,6 +4,7 @@ Plane.__index = Plane
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local ObjectData = require("@game/ReplicatedStorage/Core/ObjectData")
+local PlaneSim = require("@game/ReplicatedStorage/Modules/PlaneSim")
 local EngineState = require("@game/ReplicatedStorage/Modules/EngineState")
 local Propeller = require("@game/ReplicatedStorage/Modules/Propeller")
 
@@ -17,6 +18,7 @@ function Plane.new(model)
 	self.model = model
 	self.root = assert(model.PrimaryPart)
 	self.pilot = nil
+	self.sim = nil
 
 	-- incremented on every engine transition, so a pending delayed transition can tell it was superseded
 	self.engineSequenceId = 0
@@ -56,6 +58,11 @@ function Plane:init()
 	end
 	---
 	--
+
+	-- the server flies every plane that has no pilot. A pilot takes control in initPiloting.
+	self.sim = PlaneSim.new(self.model, true)
+	PlaneSim.setEngineState(self.sim, self:getEngineState())
+	PlaneSim.activate(self.sim, true)
 end
 
 function Plane:initPiloting()
@@ -70,14 +77,33 @@ function Plane:initPiloting()
 			self.pilot = player
 			self.root:SetNetworkOwner(player)
 
+			-- flight is client-authoritative, so the server stops writing forces and only
+			-- senses while this plane is piloted
+			self:setSimControlling(false)
+
 			print(`Pilot {player.Name} seated. Granted network ownership.`)
 		else
 			-- remove pilot
 			self.pilot = nil
 			self.root:SetNetworkOwner(nil)
+
+			self:setSimControlling(true)
+
 			print("Pilot left. Released network ownership.")
 		end
 	end)
+end
+
+--[[
+	Hand the flight model to the pilot's client, or take it back. The server keeps running
+	the sim either way; controlling only decides whether it writes forces. Nothing is
+	written on the way out, since the server clearing a constraint the pilot is driving
+	would replicate over the pilot's own value.
+]]
+function Plane:setSimControlling(controlling: boolean)
+	if self.sim then
+		self.sim.controlling = controlling
+	end
 end
 
 function Plane:getEngineState(): EngineState.State
@@ -87,6 +113,11 @@ end
 function Plane:writeEngineState(state: EngineState.State)
 	self.model:SetAttribute("engineState", state)
 	self.model:SetAttribute("engineStateTime", workspace:GetServerTimeNow())
+
+	-- the sim never reads attributes itself, so push the new state into it
+	if self.sim then
+		PlaneSim.setEngineState(self.sim, state)
+	end
 end
 
 --[[
@@ -127,12 +158,21 @@ function Plane:requestEngine(player, request)
 	end
 end
 
-function Plane:setThrottle(player, throttle)
+function Plane:setThrottle(throttle)
+	throttle = math.clamp(throttle, 0, 1)
+	self.model:SetAttribute("throttle", throttle)
+
+	-- yoke and rudder are zero because nothing on the server steers a plane yet. When an
+	-- autopilot or a taxi director exists, it feeds them here.
+	PlaneSim.setPrimaryFlightControls(self.sim, throttle, Vector2.zero, 0)
+end
+
+function Plane:pilotSetThrottle(player, throttle)
 	-- throttle ~= throttle rejects NaN
 	if player ~= self.pilot or typeof(throttle) ~= "number" or throttle ~= throttle then
 		return
 	end
-	self.model:SetAttribute("throttle", math.clamp(throttle, 0, 1))
+	self:setThrottle(throttle)
 end
 
 --
@@ -158,7 +198,7 @@ function Plane.initNetworking()
 	remotes:WaitForChild("SetThrottle").OnServerEvent:Connect(function(player, model, throttle)
 		local plane = Plane.get(model)
 		if plane then
-			plane:setThrottle(player, throttle)
+			plane:pilotSetThrottle(player, throttle)
 		end
 	end)
 end

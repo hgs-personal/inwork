@@ -20,5 +20,29 @@
 			"}",
 			""
 		]
+	},
+	"Fusion Function Component": {
+		"scope": "luau",
+		"prefix": ["fusioncomponent", "component"],
+		"description": "Fusion function component module: (scope, props) -> Child",
+		"body": [
+			"local Fusion = require(\"@game/ReplicatedStorage/Core/Fusion\")",
+			"",
+			"local Children = Fusion.Children",
+			"",
+			"export type Props = {",
+			"\t$2",
+			"}",
+			"",
+			"local function ${1:$TM_FILENAME_BASE}(scope: Fusion.Scope, props: Props): Fusion.Child",
+			"\treturn scope:New \"${3:Frame}\" {",
+			"\t\tName = \"${1}\",",
+			"\t\t$0",
+			"\t}",
+			"end",
+			"",
+			"return ${1}",
+			""
+		]
 	}
 }

@@ -1,5 +1,6 @@
 local Players = game:GetService("Players")
 
+local NetTable = require("@game/ReplicatedStorage/Core/NetTable")
 local Replicator = require("@game/ReplicatedStorage/Core/Replicator")
 local Pilot = require("@game/ReplicatedStorage/Client/Plane/Pilot")
 local PlaneReplicator = require("@game/ReplicatedStorage/Client/Plane/PlaneReplicator")
@@ -16,7 +17,7 @@ local function onSitDown(character, humanoid, seat)
 	if seat:HasTag("pilotSeat") then
 		-- start piloting
 		local control = Pilot.newControl(character, humanoid, seat, {})
-		control:start()
+		control:activate()
 
 		session = {
 			humanoid = humanoid,
@@ -50,13 +51,17 @@ end
 local function startup()
 	-- init client systems --
 	GuiRoot.init()
-	
+
+	NetTable.init()
 	Replicator.init()
 	PlaneReplicator.init()
 	Pilot.init()
-	
+
 
 	GuiRoot.start()
+	-- before Replicator, so tagged objects created by its start can read replicated tables
+	NetTable.start()
+	Replicator.start()
 	--
 
 	-- handle player character events --

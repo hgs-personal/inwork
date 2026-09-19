@@ -25,6 +25,18 @@
         },
         "SetThrottle": {
           "$className": "RemoteEvent"
+        },
+        "NetTable": {
+          "$className": "Folder",
+          "Sync": {
+            "$className": "RemoteEvent"
+          },
+          "Push": {
+            "$className": "RemoteEvent"
+          },
+          "Request": {
+            "$className": "RemoteEvent"
+          }
         }
       }
     },

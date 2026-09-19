@@ -81,13 +81,13 @@ function Pilot.newControl(character, humanoid, seat, args)
 	self:initAerodynamics()
 	self:initOnGround()
 	
-	function self:start()
+	function self:activate()
 		print("Starting pilot control")
 		self.heartbeatConn = RunService.Heartbeat:Connect(function(dt) 
 			pilotControlHeartbeat(self, dt)
 		end)
 
-		-- PilotHud.show()
+		pilotLayer.visible:set(true)
 	end
 
 	function self:destroy()
@@ -103,7 +103,7 @@ function Pilot.newControl(character, humanoid, seat, args)
 			effects:clearLocalThrottle()
 		end
 
-		-- PilotHud.hide()
+		pilotLayer.visible:set(false)
 	end
 
 	return self
