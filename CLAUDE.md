@@ -4,7 +4,8 @@
 - For lua / luau, USE TAB CHARACTERS NOT SPACES FOR INDENTATION
 - For serial execution code (think high level system modules), generally include the following lifetime functions:
     * .init(), for the first pass startup where code cannot depend on other modules being ready 
-    * 
+    * .start(), for the second pass, run after every system's init(), where code can depend on other systems
+- A module can be a system (session-lifetime, init/start), a class (objects with new/activate/destroy), or both. Classes use the standard `Class.__index = Class` pattern, so object methods must never reuse module-level function names (init, start, new, get, or other statics). No role suffixes on module names. Entry scripts only list systems and run init then start on each. Full conventions are in `docs/ARCHITECTURE.md` under "Code structure conventions".
 
 ## Strict Typing
 - Where feasible and simple, use strict typing (including --!strict at the top of files to force strict linting). Especially preferred for utility and pure function only modules (math like).
@@ -17,6 +18,7 @@
 ## General practices
 - Prefer simplicty, even it leads to more manual verbosity.
 - Avoid fallbacks as much as possible that would hide errors from calling code.
+- Centralize utility code. Before writing a helper that has no gameplay knowledge (math, Instance/part manipulation, table helpers), check Core/Util for an existing one and extend it rather than writing a local copy. If the helper is generic enough that another system could use it, add it to Core/Util instead of keeping it local to the module that first needed it. See `docs/AGENTS.md` for details.
 
 ## Planning docs
 - `docs/AGENTS.md` — how to work in this repo: orientation, manual Studio validation workflow, current known-broken state, model authoring requirements. Read first.

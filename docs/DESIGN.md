@@ -1,9 +1,10 @@
 # Game Design
 
-> **Status: proposal.** Drafted from a rough brief ("plane flying / trading RPG") and
-> from what the code already commits to. Everything here is a concrete starting position
-> meant to be edited or rejected, not a settled spec. Open questions are marked
-> **[OPEN]** and need a ruling before the systems they gate get built.
+> **Status: mostly proposal.** Drafted from a rough brief ("plane flying / trading RPG")
+> and from what the code already commits to. Unmarked sections are starting positions
+> meant to be edited or rejected. **[DECIDED]** marks rulings Henry has made.
+> **[OPEN]** marks questions that need a ruling before the systems they gate get built.
+> **[DEFERRED]** marks things considered and explicitly not being built now.
 
 ## Pitch
 
@@ -21,8 +22,9 @@ should lean into them rather than fight them:
   the player *does*, not something they wait through.
 - **Starting the engine takes six seconds and it can fail to be running.** Ritual and
   procedure are part of the fantasy. Pre-flight has texture.
-- **The plane persists in the world independent of any pilot.** Engine state and throttle
-  live on the model. A plane can be left running on a ramp; another player can climb in.
+- **Plane state lives on the model, not the pilot.** Engine state and throttle survive a
+  pilot getting out and back in. (Only a plane's owner can fly it, per the decision
+  below.)
 - **Multiplayer is shared-world.** Planes replicate to everyone; effects run for every
   client on every plane. Other pilots are visible, not abstract.
 - **Cockpit-first framing.** The HUD is a throttle bar and a yoke reticle — the interface
@@ -97,10 +99,10 @@ price = basePrice * demandMultiplier(airportProfile, good) * drift(t) * saturati
 ```
 
 **[OPEN] Is the economy shared across all players on a server, or per-player?** Shared
-is more alive and makes other pilots matter — it also means one player can tank a market
-for everyone, and it interacts with persistence (does the market reset each server?).
-Per-player is simpler and fairer but makes the world feel inert. Recommendation: shared
-per-server, resetting on server start, with airport profiles static.
+is more alive and makes other pilots matter, but one player can tank a market for
+everyone. Per-player is simpler and fairer but makes the world feel inert. Either way,
+market prices reset when a server starts (see Persistence below). Recommendation: shared
+per-server, with airport profiles static.
 
 ### Money and costs
 
@@ -113,6 +115,22 @@ idle flying isn't free:
   running the engine at full throttle continuously). Skipping it raises failure chance.
 - **Landing fees** — small, higher at big airports. Mostly flavour and a reason to prefer
   rough strips.
+
+## Persistence and ownership [DECIDED]
+
+Progress saves; the world resets. Money, owned aircraft, reputation, ratings, and any
+contract in progress persist across sessions. Market prices, where planes were parked,
+and weather are per-server and start fresh with each server.
+
+Aircraft are owned. A player's profile lists the planes they own, and they ask for one to
+be spawned at an airport. It despawns when they leave. There is no pool of shared world
+planes.
+
+Only the owner can fly a plane. Two extensions are expected later and the architecture
+leaves room for both without building either:
+
+- NPC planes, owned and flown by the game rather than a player.
+- Crews, where any member of a plane's crew may fly it.
 
 ## Progression (proposal)
 
@@ -142,20 +160,58 @@ This is the version most compatible with the flight model already built.
 
 ## The world
 
-**[OPEN] Map scale and structure.** The single most consequential unanswered question,
-because it gates airport authoring, navigation, and route design. Options:
+### Regions [DECIDED]
 
-- **Single hand-authored region** (an archipelago or a mountain valley), ~8–15 airports,
-  flight times of 3–10 minutes. Highest quality per square kilometre; every strip can be
-  memorable. Recommended.
-- **Large continuous map** with distant regions. More sense of a career, but a lot of
-  empty airspace and much more authoring.
-- **Hub-and-region** — several small authored clusters, with long transit flights
-  between them as a mid-game milestone.
+The world is made of hand-authored regions. For now there is exactly one.
 
-Whatever the scale, airports should vary along: runway length, surface, approach
-difficulty (terrain, water, crosswind), and market profile. A short gravel strip on a
-ridge that pays well *because* it's hard to reach is the archetype to aim at.
+### Size budget
+
+Roblox parts become unreliable beyond roughly 50k studs from the origin on any axis. At
+1 stud ≈ 0.28 m that is about 14 km of reach. Planes are expected to top out around
+200–300 studs/s (roughly 110–165 kt, a realistic light-aircraft range). The longest
+possible straight leg across a region is therefore about 5–7 minutes, and with 6–10
+airports in a region, typical spacing gives legs of 1–4 minutes.
+
+| Leg distance | @150 studs/s | @250 studs/s | @300 studs/s |
+| --- | --- | --- | --- |
+| 10k studs | 1.1 min | 0.7 min | 0.6 min |
+| 25k studs | 2.8 min | 1.7 min | 1.4 min |
+| 50k studs | 5.6 min | 3.3 min | 2.8 min |
+| 100k studs | 11 min | 6.7 min | 5.6 min |
+
+Terrain may have tighter coordinate bounds than parts. Verify that in Studio before laying
+out a region, because it could halve these figures.
+
+**[OPEN] Reconciling flight time with the budget.** The target was 5–20 minute flights,
+which a single region can't provide as single legs. Proposal:
+
+- Make a contract a sequence of legs (pick up at A, drop at B, pick up at B, drop at C),
+  so the 5–20 minute unit is the run rather than the leg. This also puts more takeoffs
+  and landings into a session, and those are the skill-heavy parts of flying.
+- Start players in a slow aircraft (~140 studs/s) to stretch legs. Faster aircraft then
+  shrink the map, which makes speed a meaningful progression axis.
+- Use terrain to lengthen real routes beyond straight-line distance: ridges to climb,
+  valleys to follow, approaches that need a circuit.
+
+### Multiple regions [DEFERRED]
+
+Two ways of getting more world than one region allows were considered and are not being
+built:
+
+- Stacking regions at different Y offsets inside one place.
+- Sharding regions into separate places connected by TeleportService.
+
+Moving between regions would happen either at any point along a region's edge, or at
+choke points that require a particular position, heading, and speed. Cross-region legs
+would be how 10–20 minute single flights come back, as a later progression unlock. The
+technical costs of each option are recorded in ARCHITECTURE.md under Regions. The
+architecture keeps two small conventions so this stays possible later.
+
+### Airports
+
+Airports should vary along runway length, surface, approach difficulty (terrain, water,
+crosswind), and market profile. A short gravel strip on a ridge that pays well *because*
+it's hard to reach is the archetype to aim at.
 
 **[OPEN] Weather and time of day.** Strong candidates for making identical routes feel
 different, and a natural gate for the instrument rating. Also significant scope. Suggest
@@ -198,13 +254,16 @@ Worth considering later, in rough order of appeal:
 
 Ranked by how much downstream work they gate:
 
-1. **Map scale and structure** — gates all world authoring.
-2. **Persistence model** — does progress save across sessions (DataStore), and does the
-   player own aircraft persistently? Everything about progression depends on this.
-3. **Shared vs. per-player economy** — gates the market implementation.
-4. **RPG depth** — sim-leaning or stat-leaning.
-5. **Crash consequences** — gates the damage system.
-6. **Weather and time of day** — in scope or deferred?
+1. **Leg length and contract structure.** Single-leg or multi-leg contracts, and the
+   starting aircraft's speed. Gates the contract data shape and airport layout.
+2. **Shared vs. per-player economy.** Gates the market implementation.
+3. **RPG depth.** Sim-leaning or stat-leaning.
+4. **Crash consequences.** Gates the damage system.
+5. **Weather and time of day.** In scope or deferred?
+
+Settled so far: hybrid persistence, owned aircraft spawned on request, only the owner can
+fly a plane, and a world of authored regions with a single region for now. Multiple
+regions, crews, and NPC planes are deferred.
 
 ## Design principles
 
