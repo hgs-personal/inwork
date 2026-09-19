@@ -5,7 +5,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
-local PilotHud = require("@game/ReplicatedStorage/Client/Gui/PilotHud")
+local PilotLayer = require("@game/ReplicatedStorage/Client/Gui/PilotLayer")
+	local pilotLayer
 local PlaneReplicator = require("./PlaneReplicator")
 local EngineState = require("@game/ReplicatedStorage/Modules/EngineState")
 
@@ -31,6 +32,16 @@ local setThrottleRemote = remotes:WaitForChild("SetThrottle")
 
 
 local pilotControlHeartbeat
+
+-- module functions --
+function Pilot.init()
+	-- get gui objects
+	pilotLayer = PilotLayer.mono.get()
+end
+
+function Pilot.start()
+end
+--
 
 function Pilot.newControl(character, humanoid, seat, args)
 	local self = setmetatable({}, Pilot)
@@ -76,7 +87,7 @@ function Pilot.newControl(character, humanoid, seat, args)
 			pilotControlHeartbeat(self, dt)
 		end)
 
-		PilotHud.show()
+		-- PilotHud.show()
 	end
 
 	function self:destroy()
@@ -92,7 +103,7 @@ function Pilot.newControl(character, humanoid, seat, args)
 			effects:clearLocalThrottle()
 		end
 
-		PilotHud.hide()
+		-- PilotHud.hide()
 	end
 
 	return self
@@ -261,7 +272,7 @@ function Pilot:updateRotationArcadeMode(dt)
 	self.angularVelocityMover.MaxTorque = if self.onGround then 0 else 9999999
 	self.angularVelocityMover.AngularVelocity = Vector3.new(-mposFromCenter.Y, -windVaneAngle * windVaneCoeff * ARCADE_WINDVANE_K, -mposFromCenter.X) * math.rad(15)
 
-	PilotHud.setYoke(mposFromCenter, viewportSize)
+	-- PilotHud.setYoke(mposFromCenter, viewportSize)
 end
 
 function pilotControlHeartbeat(self, dt)
@@ -287,7 +298,7 @@ function pilotControlHeartbeat(self, dt)
 	end
 
 	-- update throttle gui
-	PilotHud.setThrottle(self.throttle)
+	-- PilotHud.setThrottle(self.throttle)
 	
 	-- apply ground steer
 	self.gearCylinder.TargetAngle = groundSteer * 30
@@ -309,6 +320,9 @@ function pilotControlHeartbeat(self, dt)
 	if ARCADE_ROTATION_MODE then
 		self:updateRotationArcadeMode(dt)
 	end
+
+	-- game UI
+	pilotLayer:heartbeat(self.cf, self.v)
 end
 
 
