@@ -1,4 +1,6 @@
-local ModelZData = {}
+--!strict
+local PlaneTypes = require("@game/ReplicatedStorage/Modules/PlaneTypes")
+	type PlaneConfig = PlaneTypes.PlaneConfig
 
 local PlaneAssets = game.ReplicatedStorage.Assets.SmallPropPlane
 
@@ -6,40 +8,41 @@ local PlaneAssets = game.ReplicatedStorage.Assets.SmallPropPlane
 	Flight model tuning, read by Modules/PlaneSim. These were per-pilot constants inside
 	Client/Plane/Pilot; they are per-plane-type values, so they live here.
 ]]
-ModelZData.flight = {
-	kWingArea = 0.2,
+local ModelZData: PlaneConfig = {
+	-- flight force parameters
+	kWingArea = 0.1,
 	kDragZ = 40000 / (150^2),
-	maxThrust = 20000,
+	maxThrust = 13000,
 
-	--[[
-		Rotation, for PlaneSim's torque mode. Every one of these is a moment per unit of
-		dynamic pressure q, so the moment a surface actually makes is the coefficient times
-		q. At 150 studs/s, q is about 11250.
-
-		FIRST PASS, NOT TUNED. They were picked to be in a plausible ratio to each other,
-		not measured against this airframe's mass and inertia. Fly it and scale them.
-	]]
-	kElevator = 3,
-	kAileron = 4,
+	-- flight torque parameters
+	kElevator = 5,
+	kAileron = 2,
 	kRudder = 2,
-	kRotDamp = Vector3.new(2, 2, 1.5),
-	kWeathervane = 6,
-}
+	kRotDamp = Vector3.new(20, 5, 10),
+	kWeathervane = 8,
 
-ModelZData.engines = {
-	[1] = {
-		soundStart = PlaneAssets.EngineStart,
+	-- ground handling parameters
+	gearSteerAngle = 30,
 
-		soundMid = PlaneAssets.EngineMid,
-		soundMidRPMFactorLow = 0.8,
-		soundMidRPMFactorHigh = 1.5,
+	-- structural limits
+	crashImpactDv = 70,
 
-		soundHigh = PlaneAssets.EngineHigh,
-		soundHighRPMFactorLow = 0.8,
-		soundHighRPMFactorHigh = 1.5,
+	-- engines
+	engines = {
+		[1] = {
+			soundStart = PlaneAssets.EngineStart,
 
-		soundHighThresholdSpeed = 100, -- speed center of fade between mid and high prop sounds
-		soundHighThresholdBand = 30, -- width of fade
+			soundMid = PlaneAssets.EngineMid,
+			soundMidRPMFactorLow = 0.8,
+			soundMidRPMFactorHigh = 1.5,
+
+			soundHigh = PlaneAssets.EngineHigh,
+			soundHighRPMFactorLow = 0.8,
+			soundHighRPMFactorHigh = 1.5,
+
+			soundHighThresholdSpeed = 100, -- speed center of fade between mid and high prop sounds
+			soundHighThresholdBand = 30, -- width of fade
+		}
 	}
 }
 

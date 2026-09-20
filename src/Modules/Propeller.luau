@@ -105,6 +105,9 @@ end
 
 --[[
     Stop noise and undo anything applied to the model.
+
+    Nothing to do: the Motor6D and the cloned sounds are parented inside the propeller model, so
+    they go when it does. This exists for the day an effect is created outside the model.
 ]]
 function Propeller:destroy()
 end

@@ -28,14 +28,20 @@ local function onSitDown(character, humanoid, seat)
 	end
 end
 
-local function onGetup(character, humanoid, seat)
-	print("processing get up")
-	if session then
-		local control = session.control
-		if control then
-			control:destroy()
-		end
-		session = nil
+--[[
+	End whatever the player was doing in a vehicle. Getting up, dying, and the character being
+	removed all arrive here, sometimes more than one of them for the same event and in no
+	particular order, so both this and the control object's destroy tolerate being called twice.
+]]
+local function endSession()
+	if not session then
+		return
+	end
+
+	local control = session.control
+	session = nil
+	if control then
+		control:destroy()
 	end
 end
 --
@@ -65,22 +71,32 @@ local function startup()
 	--
 
 	-- handle player character events --
+	local characterConns = {}
+
 	local function onCharacterAdded(character)
+		-- the previous character's signals are dead, but the connections are not
+		for _, conn in characterConns do
+			conn:Disconnect()
+		end
+		table.clear(characterConns)
+
 		local humanoid = character:WaitForChild("Humanoid")
 
-		humanoid.Seated:Connect(function(active, seat)
+		table.insert(characterConns, humanoid.Seated:Connect(function(active, seat)
 			if active then
 				onSitDown(character, humanoid, seat)
 			else
-				onGetup(character, humanoid, seat)
+				endSession()
 			end
-		end)
+		end))
 
+		-- a humanoid killed while seated is exactly what a crash produces, and Seated is not a
+		-- dependable way to hear about it
+		table.insert(characterConns, humanoid.Died:Connect(endSession))
 	end
 
 	local function onCharacterRemoving(character)
-		-- TODO: assuming if character is removed, unseating logic was already processed.
-		-- This may not be the case ?...
+		endSession()
 	end
 
 	if player.Character then
@@ -91,7 +107,7 @@ local function startup()
 	player.CharacterRemoving:Connect(onCharacterRemoving)
 	--
 
-	
+
 end
 --
 

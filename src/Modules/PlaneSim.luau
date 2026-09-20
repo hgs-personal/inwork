@@ -44,6 +44,8 @@ local SafeDataModel = require("@game/ReplicatedStorage/Core/SafeDataModel")
 	local getChild = SafeDataModel.getChild
 local EngineState = require("./EngineState")
 local PlaneData = require("./PlaneData")
+local PlaneTypes = require("./PlaneTypes")
+	type PlaneConfig = PlaneTypes.PlaneConfig
 
 -- CONSTANTS --
 local G = workspace.Gravity
@@ -67,26 +69,17 @@ local GROUND_STEER_ANGLE = 30
 -- how far below a wheel point counts as touching the ground
 local GROUND_CLEARANCE = 3
 
+-- floor on the divisor that turns a velocity change into an acceleration. Physics steps at a
+-- fixed rate and heartbeats do not, so without this a very short frame turns one physics step's
+-- velocity change into an enormous, meaningless acceleration.
+local MIN_SENSE_DT = 1 / 60
+
 local LIFT_CLAMP = 1e3
 -- ceiling on the torque mode's total moment, so a dive cannot produce an absurd one
 local TORQUE_CLAMP = 1e6
 --
 
-type PlaneConfig = {
-	kWingArea: number,
-	kDragZ: number,
-	maxThrust: number,
-
-	-- torque rotation mode. All of these are moments per unit of dynamic pressure, so the
-	-- actual moment is the coefficient times q.
-	kElevator: number,					-- pitch authority per unit of yoke Y
-	kAileron: number,					-- roll authority per unit of yoke X
-	kRudder: number,					-- yaw authority per unit of rudder
-	kRotDamp: Vector3,					-- orientational drag, per axis (pitch, yaw, roll)
-	kWeathervane: number,				-- yaw restoring moment per radian of sideslip
-}
-
-type PlaneSim = {
+export type PlaneSim = {
 	model: Model,
 	root: BasePart,
 
@@ -100,6 +93,7 @@ type PlaneSim = {
 	throttle: number,
 	yoke: Vector2,
 	rudder: number,
+	groundSteer: number,
 
 	-- sensing, refreshed every heartbeat whether controlling or not
 	cf: CFrame,
@@ -108,6 +102,16 @@ type PlaneSim = {
 	v2: number,							-- speed squared
 	omegaLoc: Vector3,					-- angular velocity in the root's object space
 	liftWingNorm: number,				-- wing lift in Gs, before gravity is applied
+
+	-- impact sensing. Read by Modules/Impact; see heartbeatSensing for what net means here.
+	cfPrev: CFrame,						-- root CFrame at the end of the previous heartbeat
+	vPrev: Vector3,						-- world velocity at the end of the previous heartbeat
+	dv: Vector3,						-- raw velocity change over this heartbeat
+	dvNet: Vector3,						-- dv with gravity's contribution removed
+	dvNetLoc: Vector3,					-- dvNet in the PREVIOUS heartbeat's object space
+	aNet: Vector3,						-- dvNet as an acceleration, studs/s^2
+	senseValid: boolean,				-- false until there is a previous sample to difference against
+
 	wheelPoints: {BasePart},
 	groundCastParams: RaycastParams,
 
@@ -139,11 +143,12 @@ function PlaneSim.new(model: Model, controlling): PlaneSim
 	self.throttle = 0
 	self.yoke = V2(0, 0)
 	self.rudder = 0
+	self.groundSteer = 0
 
 	-- flight config for this plane type
 	local planeType = assert(model:GetAttribute("planeType"), "[PlaneSim] model has no planeType attribute.")
 	local planeTypeData = assert(PlaneData.index[planeType], `[PlaneSim] unrecognized planeType: {planeType}`)
-	self.config = assert(planeTypeData.flight, `[PlaneSim] planeType {planeType} has no flight config.`)
+	self.config = assert(planeTypeData, `[PlaneSim] planeType {planeType} has no flight config.`)
 
 	-- sensing
 	self.cf = self.root.CFrame
@@ -152,6 +157,14 @@ function PlaneSim.new(model: Model, controlling): PlaneSim
 	self.v2 = 0
 	self.omegaLoc = Vector3.zero
 	self.liftWingNorm = 0
+
+	self.cfPrev = self.cf
+	self.vPrev = Vector3.zero
+	self.dv = Vector3.zero
+	self.dvNet = Vector3.zero
+	self.dvNetLoc = Vector3.zero
+	self.aNet = Vector3.zero
+	self.senseValid = false
 
 	-- QueryDescendants is not in the type definitions yet
 	self.wheelPoints = (model :: any):QueryDescendants("BasePart#WheelPoints")
@@ -188,20 +201,23 @@ function PlaneSim.destroy(self: PlaneSim)
 	-- stop applying whatever this sim was applying, rather than leaving the last frame's
 	-- force on the plane forever
 	if self.controlling then
-		self.thrust.Force = Vector3.zero
-		self.angularVelocity.MaxTorque = 0
-		self.torque.Torque = Vector3.zero
+		PlaneSim.zeroForces(self)
 	end
 end
 
 --[[
-	Set the pilot inputs. throttle is 0..1, yoke is pitch and roll deflection in -1..1, and
-	rudder is ground steer in -1..1.
+	Zero every constraint this sim drives, whether or not it is the one in control.
+
+	destroy only does this when controlling, so that a sim shutting down cannot stamp on the
+	values the side that IS in control is writing. The server needs the unconditional version
+	for a plane it has just taken back from a pilot: a client's constraint writes never
+	replicate, so only the server writing zeros makes every other client see zeros.
 ]]
-function PlaneSim.setPrimaryFlightControls(self: PlaneSim, throttle: number, yoke: Vector2, rudder: number)
-	self.throttle = math.clamp(throttle, 0, 1)
-	self.yoke = V2(math.clamp(yoke.X, -1, 1), math.clamp(yoke.Y, -1, 1))
-	self.rudder = math.clamp(rudder, -1, 1)
+function PlaneSim.zeroForces(self: PlaneSim)
+	self.thrust.Force = Vector3.zero
+	self.angularVelocity.MaxTorque = 0
+	self.torque.Torque = Vector3.zero
+	self.gearCylinder.TargetAngle = 0
 end
 
 --[[
@@ -234,7 +250,7 @@ function PlaneSim.heartbeat(self: PlaneSim, dt: number)
 		PlaneSim.heartbeatRotationArcade(self, dt)
 	end
 
-	self.gearCylinder.TargetAngle = self.rudder * GROUND_STEER_ANGLE
+	PlaneSim.heartbeatGroundSteering(self, dt)
 end
 
 --[[
@@ -242,11 +258,50 @@ end
 	than the root part, so one heartbeat sees one consistent snapshot.
 ]]
 function PlaneSim.heartbeatSensing(self: PlaneSim, dt: number)
+	local vNew = self.root.AssemblyLinearVelocity
+
+	if self.senseValid then
+		self.dv = vNew - self.vPrev
+		-- gravity changes velocity every frame on its own, so it is removed here: a plane in
+		-- free fall has to measure as no impact at all, at any framerate.
+		self.dvNet = self.dv + V3(0, G * dt, 0)
+		-- an impact rotates the plane hard within the same frame, so the axis the energy
+		-- arrived on is the one the plane had before it, not after
+		self.dvNetLoc = self.cfPrev:VectorToObjectSpace(self.dvNet)
+		self.aNet = self.dvNet / math.max(dt, MIN_SENSE_DT)
+	else
+		-- first heartbeat after new() or resetSensing(): there is nothing to difference against,
+		-- and the gap since the last sample is unknown, so report no motion change rather than
+		-- a fabricated one
+		self.dv = Vector3.zero
+		self.dvNet = Vector3.zero
+		self.dvNetLoc = Vector3.zero
+		self.aNet = Vector3.zero
+		self.senseValid = true
+	end
+
 	self.cf = self.root.CFrame
-	self.v = self.root.AssemblyLinearVelocity
+	self.v = vNew
 	self.v2 = self.v:Dot(self.v)
 	self.vLoc = self.cf:VectorToObjectSpace(self.v)
 	self.omegaLoc = self.cf:VectorToObjectSpace(self.root.AssemblyAngularVelocity)
+
+	self.cfPrev = self.cf
+	self.vPrev = self.v
+end
+
+--[[
+	Drop the previous motion sample. Anything that moves the plane other than physics — a spawn,
+	a teleport — produces a velocity change that is not an impact and must not be read as one.
+]]
+function PlaneSim.resetSensing(self: PlaneSim)
+	self.cfPrev = self.root.CFrame
+	self.vPrev = self.root.AssemblyLinearVelocity
+	self.dv = Vector3.zero
+	self.dvNet = Vector3.zero
+	self.dvNetLoc = Vector3.zero
+	self.aNet = Vector3.zero
+	self.senseValid = false
 end
 
 --[[
@@ -309,32 +364,21 @@ function PlaneSim.heartbeatOnGround(self: PlaneSim, dt: number)
 end
 
 --[[
-	Torque rotation: virtual ailerons, elevators and a rudder.
+	Control wheel steering, suspension etc.
+	This may need a feedback control system in the future.
+]]
+function PlaneSim.heartbeatGroundSteering(self: PlaneSim, dt: number)
+	if self.onGround then
+		local steerTarget = self.groundSteer * self.config.gearSteerAngle
+		self.gearCylinder.TargetAngle = steerTarget
+		print("steer target", steerTarget)
+	else
+		self.gearCylinder.TargetAngle = 0
+	end
+end
 
-	Each surface's deflection is tied straight to its input, so a yoke of 0.5 is half
-	deflection and produces half the moment. That part is cartoony on purpose — no surface
-	travel curves, no control blowback, and no coupling between axes.
-
-	What is not cartoony is where the strength comes from. A control surface makes its
-	moment out of the air flowing over it, so every term below scales with dynamic pressure
-	q = 1/2 rho v^2. The consequences are the ones that make an aircraft feel like one: full
-	deflection does almost nothing at taxi speed, authority climbs with the square of
-	airspeed, and a plane that stalls or slows to nothing stops answering the controls.
-
-	Three moments are summed, all of them proportional to q:
-
-	- control, linear in aileron / elevator / rudder deflection.
-	- orientational drag, opposing the current rotation on each axis. This is what damps
-	  the plane out instead of letting a pulse of elevator leave it tumbling forever, and
-	  it is what makes the rates settle rather than integrate. Being proportional to q, it
-	  also fades with airspeed, so the plane feels loose when slow.
-	- weathervane, a restoring moment proportional to sideslip that pulls the nose back
-	  towards the relative wind. Without it the plane happily flies sideways, since nothing
-	  else here supplies directional stability.
-
-	The model requires a `Torque` constraint on the plane, with RelativeTo = Attachment0 so
-	the vector below is read in the root's object space. Control torque is cut on the ground
-	so the gear steers instead, matching the arcade mode.
+--[[
+	Virtual simulation of torque moments from flight surfaces
 ]]
 function PlaneSim.heartbeatRotationTorque(self: PlaneSim, dt: number)
 	local config = self.config

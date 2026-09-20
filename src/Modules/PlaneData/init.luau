@@ -1,4 +1,7 @@
-local PlaneData = {}
+local PlaneData: {[string]: PlaneConfig} = {}
+
+local PlaneTypes = require("./PlaneTypes")
+	export type PlaneConfig = PlaneTypes.PlaneConfig
 
 PlaneData.index = {}
 
