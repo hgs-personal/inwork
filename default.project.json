@@ -20,11 +20,17 @@
       },
       "Remotes": {
         "$className": "Folder",
-        "RequestEngine": {
-          "$className": "RemoteEvent"
-        },
-        "SetThrottle": {
-          "$className": "RemoteEvent"
+        "Plane": {
+          "$className": "Folder",
+          "RequestEngine": {
+            "$className": "RemoteEvent"
+          },
+          "SetThrottle": {
+            "$className": "RemoteEvent"
+          },
+          "ReportImpact": {
+            "$className": "RemoteEvent"
+          }
         },
         "NetTable": {
           "$className": "Folder",
