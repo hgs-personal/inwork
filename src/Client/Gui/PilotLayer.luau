@@ -14,74 +14,15 @@ local UserInputService = game:GetService("UserInputService")
 
 local Fusion = require("@game/ReplicatedStorage/Core/Fusion")
 	local CHILDREN = Fusion.Children
-	local peek = Fusion.peek
 local GuiCore = require("./Core")
 	local UDIM2_MID = GuiCore.UDIM2_MID
+local Camera = require("@game/ReplicatedStorage/Client/Camera")
+local YokeIndicator = require("./YokeIndicator")
 
 local V2 = Vector2.new
 local V2_MID = V2(0.5, 0.5)
-
 local V3_UP = Vector3.yAxis
 
--- yoke math constants (ported from the old YokeCursor) --
-local OUTPUT_POSITION_MAXIMUM = 0.8 -- scale (between mid point and screen edge)
-local OPACITY_MINIMUM = 0.2
-local OPACITY_MAXIMUM = 0.8
---
-
--- STYLE (approximate; tune to taste) --
-local STYLE = {
-	throttleColor = Color3.fromRGB(80, 220, 120),
-	throttleBackColor = Color3.fromRGB(30, 30, 30),
-	throttleBackTransparency = 0.4,
-	throttleAnchor = V2(0, 0.5),
-	throttlePosition = UDim2.new(0.04, 0, 0.5, 0),
-	throttleSize = UDim2.fromScale(0.02, 0.4),
-
-	yokeColor = Color3.fromRGB(255, 255, 255),
-	reticleSize = UDim2.fromOffset(28, 28),
-	reticleTickSize = UDim2.fromOffset(2, 8),
-	lineWidthPx = 2,
-}
---
-
-export type YokeInput = { output: Vector2, viewport: Vector2 }
-
--- Module-level Fusion state, created once in build(). Stashed here so Pilot can drive
--- the HUD after client init without a handle to the build scope.
-local throttle: Fusion.Value<number>? = nil
-local visible: Fusion.Value<boolean>? = nil
-local yoke: Fusion.Value<YokeInput>? = nil
-
--- --[[
--- 	A crosshair reticle: a center dot plus four ticks. All parts share the transparency
--- 	binding so the whole cursor fades with yoke deflection, matching the old behaviour.
--- ]]
--- local function buildReticle(scope, transparency: Fusion.UsedAs<number>)
--- 	local function tick(anchor: Vector2, position: UDim2, size: UDim2)
--- 		return scope:New "Frame" {
--- 			BorderSizePixel = 0,
--- 			BackgroundColor3 = STYLE.yokeColor,
--- 			BackgroundTransparency = transparency,
--- 			AnchorPoint = anchor,
--- 			Position = position,
--- 			Size = size,
--- 		}
--- 	end
-
--- 	local tickV = STYLE.reticleTickSize
--- 	local tickH = UDim2.fromOffset(tickV.Y.Offset, tickV.X.Offset)
-
--- 	return {
--- 		-- center dot
--- 		tick(V2_MID, UDim2.fromScale(0.5, 0.5), UDim2.fromOffset(3, 3)),
--- 		-- top / bottom / left / right ticks
--- 		tick(V2(0.5, 0), UDim2.fromScale(0.5, 0), tickV),
--- 		tick(V2(0.5, 1), UDim2.fromScale(0.5, 1), tickV),
--- 		tick(V2(0, 0.5), UDim2.fromScale(0, 0.5), tickH),
--- 		tick(V2(1, 0.5), UDim2.fromScale(1, 0.5), tickH),
--- 	}
--- end
 
 function PilotLayer._new(scope: Fusion.Scope)
 	local self = setmetatable({}, PilotLayer)
@@ -98,6 +39,8 @@ function PilotLayer._new(scope: Fusion.Scope)
 
 	self.attitude = scope:Value(V2(0, 0))
 
+	self.viewport = scope:Value(workspace.CurrentCamera.ViewportSize)
+
 	return self
 end
 
@@ -110,7 +53,12 @@ function PilotLayer.mount(self, scope)
 		Size = UDim2.new(1, 0, 1, 0),
 		BackgroundTransparency = 1,
 		[CHILDREN] = {
-			PilotLayer.panel01(self, scope)
+			PilotLayer.panel01(self, scope),
+			PilotLayer.panel10(self, scope),
+			YokeIndicator.yoke(scope, { 
+				yoke = self.yoke,
+				viewport = self.viewport,
+			}),
 		}
 	}
 end
@@ -134,6 +82,9 @@ function PilotLayer.heartbeat(self, cf: CFrame, velocity: Vector3)
 	print(("roll : %2.2f"):format(math.deg(roll)))
 
 	self.attitude:set(V2(roll, pitch))
+
+	local viewport = Camera.currentCamera().ViewportSize
+	self.viewport:set(viewport)
 end
 --
 
@@ -304,6 +255,51 @@ function PilotLayer.panel01(self, scope)
 	}
 end
 
+local KNOB_I = "rbxassetid://87527774386333"
+local KNOB_SIZE = V2(55, 35)
+local KNOB_X = 45
+local KNOB_Y_MIN = -5
+local KNOB_Y_MAX = 175
+local function throttleKnob(scope, props)
+	local position = scope:Computed(function(use, _)
+		local throttle = use(props.throttle)
+		local y = GuiCore.lerp1(KNOB_Y_MAX, KNOB_Y_MIN, throttle)
+		print("gui throttle update:", y, y/props.panelSize.Y)
+		return UDim2.new(KNOB_X / props.panelSize.X, 0, y / props.panelSize.Y, 0)
+	end)
+
+	return scope:New "ImageLabel" {
+		Name = "ThrottleKnob",
+		Position = position,
+		Size = GuiCore.rescaleV2UDim2(KNOB_SIZE, props.panelSize),
+		BackgroundTransparency = 1,
+		Image = KNOB_I,
+
+		[CHILDREN] = {}
+	}
+end
+
+local PANEL_10_I = "rbxassetid://99985828877512"
+local PANEL_10_SIZE = V2(100, 200)
+
+function PilotLayer.panel10(self, scope)
+	return scope:New "ImageLabel" {
+		Name = "PanelMiddleRight",
+		AnchorPoint = V2(0, 0),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		SizeConstraint = Enum.SizeConstraint.RelativeYY,
+		Size = GuiCore.rescaleV2UDim2(PANEL_10_SIZE, 1080),
+		BackgroundTransparency = 1,
+		Image = PANEL_10_I,
+
+		[CHILDREN] = {
+			throttleKnob(scope, {
+				panelSize = PANEL_10_SIZE,
+				throttle = self.throttle,
+			})
+		}	
+	}
+end
 
 
 return PilotLayer

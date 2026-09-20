@@ -87,6 +87,7 @@ function Pilot.newControl(character, humanoid, seat, args)
 			pilotControlHeartbeat(self, dt)
 		end)
 
+		UserInputService.MouseIconEnabled = false
 		pilotLayer.visible:set(true)
 	end
 
@@ -103,6 +104,7 @@ function Pilot.newControl(character, humanoid, seat, args)
 			effects:clearLocalThrottle()
 		end
 
+		UserInputService.MouseIconEnabled = true
 		pilotLayer.visible:set(false)
 	end
 
@@ -158,6 +160,7 @@ function Pilot:setThrottle(throttle)
 		return
 	end
 	self.throttle = throttle
+	pilotLayer.throttle:set(self.throttle)
 	self.throttleDirty = true
 end
 
@@ -272,7 +275,8 @@ function Pilot:updateRotationArcadeMode(dt)
 	self.angularVelocityMover.MaxTorque = if self.onGround then 0 else 9999999
 	self.angularVelocityMover.AngularVelocity = Vector3.new(-mposFromCenter.Y, -windVaneAngle * windVaneCoeff * ARCADE_WINDVANE_K, -mposFromCenter.X) * math.rad(15)
 
-	-- PilotHud.setYoke(mposFromCenter, viewportSize)
+	-- TODO: move this to the rest of the code which updates pilotLayer
+	pilotLayer.yoke:set(mposFromCenter)
 end
 
 function pilotControlHeartbeat(self, dt)
@@ -290,15 +294,11 @@ function pilotControlHeartbeat(self, dt)
 	-- apply throttle
 	self:setThrottle(self.throttle + throttleMove * 1 * dt)
 	self:updateThrottleReplication()
-
 	-- drive this plane's effects from local throttle, skipping the network delay
 	local effects = self:getEffects()
 	if effects then
 		effects:setLocalThrottle(self.throttle)
 	end
-
-	-- update throttle gui
-	-- PilotHud.setThrottle(self.throttle)
 	
 	-- apply ground steer
 	self.gearCylinder.TargetAngle = groundSteer * 30

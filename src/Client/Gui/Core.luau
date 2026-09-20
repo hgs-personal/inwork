@@ -73,6 +73,13 @@ function GuiCore.rescaleV2UDim2(input: Vector2, ref: Vector2 | number)
 	input /= ref
 	return UDim2.fromScale(input.X, input.Y)
 end
+
+--[[
+	Lerp scalar float. t=0 -> a, t=1-> b
+]]
+function GuiCore.lerp1(a, b, t)
+	return t * (b - a) + a
+end
 --
 
 return GuiCore
