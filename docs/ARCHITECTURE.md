@@ -394,10 +394,12 @@ Where existing code differs from the conventions above, as of commit `ac4afa5`:
   the object registers itself with ObjectData inside its `init` method. Replace
   `initNetworking` with the system functions (handlers connect in `Plane.start`), rename
   the object's `init` method to `activate`, and move ObjectData registration to the code that
-  creates the plane. Move the pilot check and the throttle type and NaN check out of
-  `requestEngine` and `setThrottle` into the handlers. Add `destroy`.
-- **`Server.server.luau`** builds the test plane inline. That moves into `Plane.start`,
-  marked as a placeholder until `PlaneSpawner` exists.
+  creates the plane. The rename has to come first: a module-level `Plane.start` cannot be
+  added while the object still has an `init` method, since the two would collide. Move the
+  pilot check and the throttle type and NaN check out of `requestEngine` and `setThrottle`
+  into the handlers. `destroy` now exists.
+- **`Server.server.luau`** builds the test plane inline, and respawns it after a crash.
+  Both move into `PlaneSpawner` when it exists.
 - **`Client/Plane/PlaneReplicator`** has `init` (subscribing the tag receiver) but no
   `start`. Add an empty `start`. Its objects use `start` where `activate` is now expected;
   rename the method and the call in the tag receiver. Once the system `start` exists, the
@@ -457,6 +459,9 @@ remotes. Remotes carry *requests*, attributes carry *state*.
 | `engineStateTime` | Server (`workspace:GetServerTimeNow()`) | Effects, for sequence sync |
 | `throttle` | Server | PlaneReplicator |
 | `planeType` | Authoring / server | PlaneReplicator → `PlaneData.index` lookup |
+| `crashed` | Server | Pilot (stops flying), crash effects |
+| `crashTime` | Server (`workspace:GetServerTimeNow()`) | Effects, for sequence sync |
+| `crashImpact` | Server | Nothing yet; the hook a repair cost would price |
 
 This gives free replication, free late-join state, and free continuity across a pilot
 swap — `Pilot:loadState()` reads the attributes so a new pilot picks up where the last

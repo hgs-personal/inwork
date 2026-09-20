@@ -69,6 +69,15 @@ does not start and a two-client play-test wasn't possible:
 
 - `Core/NetTable`. Nothing uses it yet. Exercise it with a throwaway table on both sides
   before building on it.
+- Crash detection (`Modules/Impact`), and the destruction path in `Server/Plane`. A crash
+  destroys the plane and kills the pilot, so the thing to watch is teardown: no leftover
+  heartbeat connections, no errors about destroyed instances, and a character that can
+  walk and sit again afterwards. The thresholds in `Impact` and `crashImpactDv` in
+  `ModelZData` have never been flown — the acceptance test is that no landing, however
+  firm, ever trips one.
+- **Plane models need `AirframeParts` tags before any of this runs.** `Impact` asserts on
+  finding no part tagged `AirframeParts`, on both sides. Tag the fuselage, wings and tail;
+  do not tag the gear or wheels, or landing hard will read as a crash.
 - `Modules/PlaneSim`, and the `Server/Plane` wiring that feeds it. The server now applies
   thrust and aerodynamics to every unpiloted plane, which is new behaviour — previously
   nothing moved an unpiloted plane at all. Watch for a parked plane drifting or fighting
