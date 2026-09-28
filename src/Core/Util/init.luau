@@ -1,6 +1,18 @@
 --!strict
 local CoreUtil = {}
 
+-- Roblox instance manipulation --
+CoreUtil.Inst = {}
+function CoreUtil.Inst.destroyArray(array: {Instance})
+	for i = 1, #array do
+		local instance = array[i]
+		if instance.Parent ~= nil then
+			instance:Destroy()
+		end
+	end
+end
+--
+
 -- Roblox part manipulation --
 CoreUtil.Parts = {}
 
@@ -33,6 +45,29 @@ function CoreUtil.Parts.makePartsEffectOnly(parts: {Instance} | Model)
 end
 --
 
+-- Sounds --
+CoreUtil.Sound = {}
+
+function CoreUtil.Sound.playEffectSoundPositional(sound: Sound, at: Vector3)
+	local clone = sound:Clone()
+	local part = Instance.new("Part")
+	part.Name = "EffectSoundPart"
+	part.CFrame = CFrame.new(at)
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.AudioCanCollide = false
+	part.Transparency = 1
+	part.Parent = workspace
+	clone.Parent = part
+
+	clone.PlayOnRemove = true
+	part:Destroy()
+end
+
+--
+
 -- Argument validation, for remote handlers and anywhere else the input is untrusted --
 CoreUtil.Validate = {}
 
@@ -55,6 +90,14 @@ CoreUtil.Math = {}
 ]]
 function CoreUtil.Math.lowPassDecay(value: number, dt: number, tau: number): number
 	return value * math.exp(-dt / tau)
+end
+--
+
+-- Collections --
+function CoreUtil.mergeArray(into, from)
+	for i = 1, #from do
+		table.insert(into, from[i])
+	end
 end
 --
 

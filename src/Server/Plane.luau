@@ -64,6 +64,8 @@ function Plane.new(model)
 	-- incremented on every engine transition, so a pending delayed transition can tell it was superseded
 	self.engineSequenceId = 0
 
+	self.breakableConstraints = {}
+
 	return self
 end
 
@@ -97,6 +99,7 @@ function Plane:init()
 			weld.C0 = self.root.CFrame:Inverse() * part.CFrame
 			weld.Parent = self.root
 			part.Anchored = false
+			table.insert(self.breakableConstraints, weld)
 		end
 	end
 
@@ -104,9 +107,17 @@ function Plane:init()
 	---- propellers
 	local propellerModels = self.model:WaitForChild("Propellers"):GetChildren()
 	for _, propellerModel in propellerModels do
-		Propeller.modelBuildUp(propellerModel, self.root)
+		Propeller.modelBuildUp(propellerModel, self.root, self.breakableConstraints)
 	end
 	---
+
+	---- collect gear constraints for destruction during crash
+	local constraints = self.model.Constraints :: Folder
+	local springs = constraints:QueryDescendants(".gearSpring")
+	CoreUtil.mergeArray(self.breakableConstraints, springs)
+	local gearHinges = constraints:QueryDescendants(".gearHinge")
+	CoreUtil.mergeArray(self.breakableConstraints, gearHinges)
+	----
 	--
 
 	-- the server flies every plane that has no pilot. A pilot takes control in initPiloting.
@@ -310,13 +321,30 @@ function Plane:crash(magnitude)
 	-- pilot's last frame of thrust and torque go away for everyone else
 	PlaneSim.zeroForces(self.sim)
 
+	-- do full breakup
+	CoreUtil.Inst.destroyArray(self.breakableConstraints)
+
 	-- one arrival that bounces or cartwheels is one crash
 	Impact.destroy(self.impact)
 	self.impact = nil
 
+	self:killPilot()
+
 	task.delay(CRASH_SEQUENCE_DURATION, function()
 		self:destroy()
 	end)
+end
+
+function Plane:killPilot()
+	-- kill the pilot before the model goes, so the death is not racing a destroyed seat weld
+	local player = self.crashPlayer or self.pilot
+	local character = player and player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.Health > 0 then
+		humanoid.Health = 0
+	end
+	self.pilot = nil
+	self.crashPlayer = nil
 end
 
 --[[
@@ -329,16 +357,6 @@ function Plane:destroy()
 		return
 	end
 	self.destroyed = true
-
-	-- kill the pilot before the model goes, so the death is not racing a destroyed seat weld
-	local player = self.crashPlayer or self.pilot
-	local character = player and player.Character
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	if humanoid and humanoid.Health > 0 then
-		humanoid.Health = 0
-	end
-	self.pilot = nil
-	self.crashPlayer = nil
 
 	if self.sim then
 		PlaneSim.destroy(self.sim)

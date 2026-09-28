@@ -39,9 +39,9 @@
 	a wire optimization, not a change in local semantics.
 
 	Remotes (declared in default.project.json under Remotes/NetTable):
-		Sync     server -> client   (name: string, change: Change?)
+		Sync     server -> client   (id: string, change: Change?)
 		                            a nil change means the table was destroyed
-		Push     client -> server   (name: string, change: Change)
+		Push     client -> server   (id: string, change: Change)
 		Request  client -> server   ()  asks for a snapshot of every table
 
 	Every change travels as one Change on one remote, so writes and array operations keep
@@ -69,7 +69,7 @@ local syncRemote = remotes:WaitForChild("Sync")
 local pushRemote = remotes:WaitForChild("Push")
 local requestRemote = remotes:WaitForChild("Request")
 
--- name -> NetTable, on both sides
+--{scope -> {[id] -> table}}
 local tables = {}
 
 local addedListeners = {}
@@ -92,9 +92,9 @@ local function isValidIndex(index): boolean
 	return typeof(index) == "number" and index == math.floor(index) and index >= 1
 end
 
-local function construct(name: string)
+local function construct(scope: string, id: any)
 	local self = setmetatable({}, NetTable)
-	self.name = name
+	self.id = id
 	self.data = {}
 	-- server only. Clients never read this, and it is not replicated.
 	self.clientWritable = false
@@ -175,34 +175,41 @@ end
 local function submit(self, change)
 	if IS_SERVER then
 		applyChange(self, change)
-		syncRemote:FireAllClients(self.name, change)
+		syncRemote:FireAllClients(self.id, change)
 	else
-		pushRemote:FireServer(self.name, change)
+		pushRemote:FireServer(self.id, change)
 	end
 end
 
 -- class --
 
 --[[
-	Create a table under a unique name. Server only: clients get their copies through
+	Create a table under a unique id. Server only: clients get their copies through
 	replication. Call activate() to publish it.
 ]]
-function NetTable.new(name: string)
+function NetTable.new(scope: string, id: string)
 	assert(IS_SERVER, "NetTable.new is server only; clients receive tables through replication.")
-	assert(typeof(name) == "string", `NetTable name must be a string, got {typeof(name)}.`)
-	assert(not tables[name], `NetTable "{name}" already exists.`)
 
-	return construct(name)
+	return construct(scope, id)
 end
 
 --[[
 	Publish the table: register it for lookup and replicate it to every client.
 ]]
 function NetTable:activate()
-	assert(not tables[self.name], `NetTable "{self.name}" has already been activated.`)
+	local scopeTable = tables[self.scope]
+	if scopeTable and scopeTable[self.id] then
+		error(`[NetTable:activate] NetTable {self.scope}/{self.id} already activated.`)
+	end
+	
+	-- lazy build scope container
+	if not scopeTable then
+		scopeTable = {}
+		tables[self.scope] = scopeTable
+	end
 
-	tables[self.name] = self
-	syncRemote:FireAllClients(self.name, { kind = "write", set = self.data })
+	scopeTable[self.id] = self
+	syncRemote:FireAllClients(self.scope, self.id, { kind = "write", set = self.data })
 
 	announce(addedListeners, self)
 end
@@ -211,11 +218,15 @@ end
 	Unpublish the table and drop it from every client.
 ]]
 function NetTable:destroy()
-	tables[self.name] = nil
+	local scopeTable = tables[self.scope]
+	if scopeTable then
+		scopeTable[self.id] = nil
+	end
+
 	table.clear(self.changedListeners)
 
 	if IS_SERVER then
-		syncRemote:FireAllClients(self.name, nil)
+		syncRemote:FireAllClients(self.scope, self.id, nil)
 	end
 
 	announce(removedListeners, self)

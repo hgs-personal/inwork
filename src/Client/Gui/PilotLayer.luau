@@ -74,12 +74,10 @@ function PilotLayer.heartbeat(self, cf: CFrame, velocity: Vector3)
 	local look = cf.LookVector
 	local right = cf.RightVector
 	local pitch = math.asin(look.Y)
-	print(("pitch: %2.2f"):format(math.deg(pitch)))
 
 	-- use reference up with no roll to get signed roll (TODO: worry about singularities)
 	local up0 = look:Cross(V3_UP):Cross(look).Unit
 	local roll = math.acos(right:Dot(up0)) - math.pi / 2
-	print(("roll : %2.2f"):format(math.deg(roll)))
 
 	self.attitude:set(V2(roll, pitch))
 

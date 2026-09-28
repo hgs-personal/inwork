@@ -21,7 +21,7 @@ end
 --[[
     Create required welds and rotating Motor6D based on alignment of reference plane root.
 ]]
-function Propeller.modelBuildUp(propellerModel: Model, planeRoot: BasePart)
+function Propeller.modelBuildUp(propellerModel: Model, planeRoot: BasePart, breakableConstraints)
     local propRoot = assert(propellerModel.PrimaryPart, "propeller model has no primary part.")
     local parts = propellerModel:GetChildren()
     UtilParts.makePartsEffectOnly(parts)
@@ -34,6 +34,7 @@ function Propeller.modelBuildUp(propellerModel: Model, planeRoot: BasePart)
     joint.C1 = propRoot.CFrame:Inverse() * planeRoot.CFrame * joint.C0
     joint.Part1 = propRoot
     joint.Parent = propellerModel
+    table.insert(breakableConstraints, joint)
 end
 
 --[[

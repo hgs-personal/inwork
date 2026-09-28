@@ -8,6 +8,7 @@ local ObjectData = require("@game/ReplicatedStorage/Core/ObjectData")
 local Propeller = require("@game/ReplicatedStorage/Modules/Propeller")
 local EngineState = require("@game/ReplicatedStorage/Modules/EngineState")
 local PlaneData = require("@game/ReplicatedStorage/Modules/PlaneData")
+local PlaneCrashEffects = require("@game/ReplicatedStorage/Client/Effects/PlaneCrashEffects")
 
 -- CONSTANTS --
 local PLANE_TAG = "plane"
@@ -51,6 +52,8 @@ function PlaneReplicator:start()
 	self.heartbeatConn = RunService.Heartbeat:Connect(function(dt)
 		self:update(dt)
 	end)
+
+	self:monitorCrashed()
 end
 
 --[[
@@ -116,6 +119,30 @@ function PlaneReplicator:updateEngine(dt, throttle)
 		propeller:update(dt)
 	end
 	-- TODO: engine sound pitch/volume, exhaust particles
+end
+
+function PlaneReplicator:monitorCrashed()
+	self.model:GetAttributeChangedSignal("crashed"):Connect(function() 
+		-- allow for other attribute changes from the server to be recieved
+		local crashed = self.model:GetAttribute("crashed")
+		if not crashed then
+			return
+		end
+
+		self:onCrash()
+	end)
+end
+
+function PlaneReplicator:onCrash()
+	task.defer(function()
+		local crashTime = self.model:GetAttribute("crashTime")
+		local magnitude = self.model:GetAttribute("crashImpact")
+		print("detected plane crash. attribute states: crashTime=", crashTime, "magnitude=", magnitude)
+
+		PlaneCrashEffects.spawn({
+			positionAtImpact = self.model.PrimaryPart.CFrame.Position
+		})
+	end)
 end
 
 function PlaneReplicator:updateWind(dt, speed)

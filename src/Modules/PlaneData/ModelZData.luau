@@ -10,22 +10,22 @@ local PlaneAssets = game.ReplicatedStorage.Assets.SmallPropPlane
 ]]
 local ModelZData: PlaneConfig = {
 	-- flight force parameters
-	kWingArea = 0.1,
-	kDragZ = 40000 / (150^2),
+	kWingArea = 0.05,
+	kDragZ = 10000 / (150^2),
 	maxThrust = 13000,
 
 	-- flight torque parameters
 	kElevator = 5,
 	kAileron = 2,
 	kRudder = 2,
-	kRotDamp = Vector3.new(20, 5, 10),
+	kRotDamp = Vector3.new(10, 2, 5),
 	kWeathervane = 8,
 
 	-- ground handling parameters
 	gearSteerAngle = 30,
 
 	-- structural limits
-	crashImpactDv = 70,
+	crashImpactDv = 50,
 
 	-- engines
 	engines = {
