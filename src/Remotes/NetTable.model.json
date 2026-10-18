@@ -1,0 +1,12 @@
+{
+    "ClassName": "Folder",
+    "Sync": {
+        "ClassName": "RemoteEvent"
+    },
+    "Push": {
+        "ClassName": "RemoteEvent"
+    },
+    "Request": {
+        "ClassName": "RemoteEvent"
+    }
+}

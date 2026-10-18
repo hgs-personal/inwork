@@ -19,31 +19,8 @@
         }
       },
       "Remotes": {
-        "$className": "Folder",
-        "Plane": {
-          "$className": "Folder",
-          "RequestEngine": {
-            "$className": "RemoteEvent"
-          },
-          "SetThrottle": {
-            "$className": "RemoteEvent"
-          },
-          "ReportImpact": {
-            "$className": "RemoteEvent"
-          }
-        },
-        "NetTable": {
-          "$className": "Folder",
-          "Sync": {
-            "$className": "RemoteEvent"
-          },
-          "Push": {
-            "$className": "RemoteEvent"
-          },
-          "Request": {
-            "$className": "RemoteEvent"
-          }
-        }
+        "$path": "src/Remotes",
+        "$className": "Folder"
       }
     },
 
