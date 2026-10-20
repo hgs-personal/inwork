@@ -5,6 +5,13 @@ local Replicator = require("@game/ReplicatedStorage/Core/Replicator")
 local Pilot = require("@game/ReplicatedStorage/Client/Plane/Pilot")
 local PlaneReplicator = require("@game/ReplicatedStorage/Client/Plane/PlaneReplicator")
 local GuiRoot = require("@game/ReplicatedStorage/Client/Gui/Root")
+local Test = require("@game/ReplicatedStorage/Core/Test")
+local ClientTests = require("@game/ReplicatedStorage/Client/Tests")
+
+-- Constants --
+-- run the client test procedures in Client/Tests once startup finishes
+local RUN_TESTS = true
+--
 
 local player = Players.LocalPlayer
 
@@ -107,7 +114,9 @@ local function startup()
 	player.CharacterRemoving:Connect(onCharacterRemoving)
 	--
 
-
+	if RUN_TESTS then
+		Test.run("Client", ClientTests)
+	end
 end
 --
 

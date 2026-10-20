@@ -3,8 +3,12 @@ local ServerStorage = game:GetService("ServerStorage")
 local NetTable = require("@game/ReplicatedStorage/Core/NetTable")
 local PlaneSim = require("@game/ReplicatedStorage/Modules/PlaneSim")
 local Plane = require("@game/ServerScriptService/Server/Plane")
+local Test = require("@game/ReplicatedStorage/Core/Test")
+local ServerTests = require("@game/ServerScriptService/Server/Tests")
 
 -- CONSTANTS --
+-- run the server test procedures in Server/Tests once startup finishes
+local RUN_TESTS = true
 -- how long after a plane is destroyed before another appears. Placeholder, see spawnPlane.
 local PLANE_RESPAWN_DELAY = 5
 --
@@ -47,3 +51,7 @@ local function buildPlane(model)
 end
 
 buildPlane(modelZ)
+
+if RUN_TESTS then
+	Test.run("Server", ServerTests)
+end
