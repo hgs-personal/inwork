@@ -1,12 +1,12 @@
 {
-    "$className": "Folder",
+    "ClassName": "Folder",
     "RequestEngine": {
-        "$className": "RemoteEvent"
+        "ClassName": "RemoteEvent"
     },
     "SetThrottle": {
-        "$className": "RemoteEvent"
+        "ClassName": "RemoteEvent"
     },
     "ReportImpact": {
-        "$className": "RemoteEvent"
+        "ClassName": "RemoteEvent"
     }
 }
