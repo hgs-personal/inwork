@@ -1,6 +1,10 @@
 --!strict
 local CoreUtil = {}
 
+-- Child modules, required explicitly --
+CoreUtil.Signal = require("@self/Signal")
+--
+
 -- Roblox instance manipulation --
 CoreUtil.Inst = {}
 function CoreUtil.Inst.destroyArray(array: {Instance})
@@ -90,6 +94,57 @@ CoreUtil.Math = {}
 ]]
 function CoreUtil.Math.lowPassDecay(value: number, dt: number, tau: number): number
 	return value * math.exp(-dt / tau)
+end
+--
+
+-- Compact integer <-> string encoding --
+CoreUtil.Encode = {}
+
+local BASE94_FIRST = 33		-- '!', the first printable non-space ASCII character
+local BASE94_DIGITS = 94	-- through '~' at 126, so every digit survives a log line intact
+
+--[[
+	Write a non-negative integer in base 94 over printable ASCII, most significant digit first.
+	Base 94 is the widest alphabet that stays printable, which keeps an encoded value a quarter
+	the length of its decimal form without making it unreadable in output: one character below 94,
+	two below 8836, three below 830,584.
+
+	Exact up to 2^53, the point where a Luau number stops representing every integer.
+]]
+function CoreUtil.Encode.toBase94(value: number): string
+	if value < 0 or value ~= math.floor(value) then
+		error(`base 94 encoding needs a non-negative integer, got {value}`)
+	end
+
+	local digits: {string} = {}
+	repeat
+		-- built least significant first, so the loop below reverses it
+		table.insert(digits, string.char(BASE94_FIRST + value % BASE94_DIGITS))
+		value = math.floor(value / BASE94_DIGITS)
+	until value == 0
+
+	local reversed: {string} = table.create(#digits)
+	for i = #digits, 1, -1 do
+		table.insert(reversed, digits[i])
+	end
+	return table.concat(reversed)
+end
+
+-- Reverses toBase94. Errors on anything that is not a run of base 94 digits.
+function CoreUtil.Encode.fromBase94(encoded: string): number
+	if #encoded == 0 then
+		error("base 94 decoding needs at least one digit.")
+	end
+
+	local value = 0
+	for i = 1, #encoded do
+		local digit = string.byte(encoded, i) - BASE94_FIRST
+		if digit < 0 or digit >= BASE94_DIGITS then
+			error(`{string.sub(encoded, i, i)} is not a base 94 digit.`)
+		end
+		value = value * BASE94_DIGITS + digit
+	end
+	return value
 end
 --
 
