@@ -1,12 +1,13 @@
 {
     "ClassName": "Folder",
-    "Sync": {
-        "ClassName": "RemoteEvent"
-    },
-    "Push": {
-        "ClassName": "RemoteEvent"
-    },
-    "Request": {
-        "ClassName": "RemoteEvent"
-    }
+    "Children": [
+        {
+            "Name": "Packet",
+            "ClassName": "RemoteEvent"
+        },
+        {
+            "Name": "Sync",
+            "ClassName": "RemoteEvent"
+        }
+    ]
 }

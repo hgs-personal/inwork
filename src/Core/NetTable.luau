@@ -1,511 +1,545 @@
+--!strict
 --[[
-	NetTable — named, flat Luau tables replicated between the server and every client.
+	Object to replicate flat dictionaries / arrays from server and client. Vice-versa TBD.
+	Each NetTable handle exists as a unique id entity.
 
-	A NetTable is a one-level table: keys are strings or numbers, values are scalars.
-	Dictionaries and arrays both work; nested tables do not and assert. The server owns
-	every table. Clients receive mirrors, and may write only to tables the server has
-	marked `clientWritable`.
-
-	Server:
-		local settings = NetTable.new("settings")
-		settings.clientWritable = true
-		settings:activate()
-		settings:set("maxCargo", 12)
-
-	Client:
-		local settings = NetTable.find("settings")
-		settings:get("maxCargo")
-		settings:onChanged(function(key, value) ... end)
-
-	Because a table arrives some time after the client starts, client code that needs one
-	at startup uses NetTable.onAdded rather than NetTable.find.
-
-	A client's writes do not touch its own copy. They are sent to the server, and the
-	change arrives back through the normal sync. There is therefore one authority for the
-	contents and no way for a rejected write to leave a client disagreeing with the
-	server. The cost is a round trip before the client sees its own write.
-
-	`clientWritable` lives on the server's copy only; it is never replicated, and the
-	field on a client's mirror is always false.
-
-	Array operations
-	----------------
-	append / insert / removeAt treat the table as an array and send the operation itself,
-	not its consequences. Removing index 3 of a 200-entry array is one small packet rather
-	than 198 index writes.
-
-	Locally the operation is still expanded into a changed event per shifted index, so a
-	listener keyed on index stays correct and nothing is silently missed. The compaction is
-	a wire optimization, not a change in local semantics.
-
-	Remotes (declared in default.project.json under Remotes/NetTable):
-		Sync     server -> client   (id: string, change: Change?)
-		                            a nil change means the table was destroyed
-		Push     client -> server   (id: string, change: Change)
-		Request  client -> server   ()  asks for a snapshot of every table
-
-	Every change travels as one Change on one remote, so writes and array operations keep
-	their order relative to each other. A Change is one of:
-		{ kind = "write",    set = {[any]: any}?, removed = {any}? }
-		{ kind = "insert",   index = number, value = any }
-		{ kind = "removeAt", index = number }
-		{ kind = "append",   value = any }
-
-	"append" is client -> server only: the server resolves it against its own array length
-	and replicates the result as an "insert", so a client whose mirror is short still
-	appends to the real end.
+	A scope has two outbound paths per heartbeat:
+		1. the delta packet, built once and shared by every already-synced player.
+		2. a full snapshot, built once from the scope's live handles and sent only to the
+		   players added since the last heartbeat.
+	A joining player is promoted into the delta recipients only after their snapshot goes out,
+	so they never receive a change for a table they do not hold yet.
 ]]
-
 local NetTable = {}
-NetTable.__index = NetTable
 
+local ExperienceStateRecordingService = game:GetService("ExperienceStateRecordingService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local IS_SERVER = RunService:IsServer()
 
 local remotes = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("NetTable")
-local syncRemote = remotes:WaitForChild("Sync")
-local pushRemote = remotes:WaitForChild("Push")
-local requestRemote = remotes:WaitForChild("Request")
+local remotePacket = remotes:WaitForChild("Packet") :: RemoteEvent	-- per-heartbeat field deltas.
+local remoteSync = remotes:WaitForChild("Sync") :: RemoteEvent		-- full state for a joiner.
 
---{scope -> {[id] -> table}}
-local tables = {}
+-- if a value field is a string and starts with "%" don't assume any special logic.
+local fieldEscape = "%"
+local fieldSpecialPrefix = "/"
+local fieldSubPrefix = "S"
+local fieldDelete = "D"
 
-local addedListeners = {}
-local removedListeners = {}
+local packetActionNew = "N"
+local packetActionRevise = "R"
+local packetActionDelete = "D"
 
-local started = false
+-- assigned in the ServerHandle block below, used by Scope:processBroadcasts above it.
+local newServerHandle, handleFromData, serializeFull, newItem
 
--- shared --
+-- server scope logic --
+local Scope = {}
+Scope.__index = Scope
 
-local function isValidKey(key): boolean
-	local keyType = typeof(key)
-	return keyType == "string" or keyType == "number"
-end
+function NetTable.scope()
+	local self = setmetatable({}, Scope)
 
-local function isValidValue(value): boolean
-	return value ~= nil and typeof(value) ~= "table"
-end
+	-- players holding this scope's tables already, and so the delta packet's recipients.
+	self.players = {}
+	-- players added but not yet sent a snapshot. Promoted into players once they have one.
+	self.joining = {}
+	-- every live handle in this scope, by id. A snapshot is built from exactly this set.
+	self.handles = {}
+	self.packet = {}
+	self.broadcasts = {}
+	self.connection = nil
 
-local function isValidIndex(index): boolean
-	return typeof(index) == "number" and index == math.floor(index) and index >= 1
-end
-
-local function construct(scope: string, id: any)
-	local self = setmetatable({}, NetTable)
-	self.id = id
-	self.data = {}
-	-- server only. Clients never read this, and it is not replicated.
-	self.clientWritable = false
-	self.changedListeners = {}
 	return self
 end
 
---[[
-	Call every listener in a set with the table. Cloned so a listener that disconnects
-	itself does not mutate the array being iterated.
-]]
-local function announce(listeners, netTable)
-	for _, listener in table.clone(listeners) do
-		listener(netTable)
+function Scope:activate()
+	self.connection = RunService.Heartbeat:Connect(function()
+		self:processBroadcasts()
+	end)
+	-- per-frame scratch only. players / joining / handles are durable and must survive this.
+	table.clear(self.broadcasts)
+	table.clear(self.packet)
+end
+
+function Scope:destroy()
+	if self.connection then
+		self.connection:Disconnect()
+		self.connection = nil
 	end
+	table.clear(self.players)
+	table.clear(self.joining)
+	table.clear(self.handles)
+	table.clear(self.broadcasts)
+	table.clear(self.packet)
 end
 
 --[[
-	Write a change into a table's own data and tell its listeners. Used by the server when
-	it makes a change and by the client when one arrives. Keys whose value is unchanged
-	are skipped, so a duplicate sync fires nothing.
-
-	An insert or removeAt reports a changed event for every index it shifted, since those
-	indices really do hold different values afterwards.
+	Add a player to this scope. They receive one snapshot of every live table on the next
+	heartbeat, and only then start receiving deltas.
 ]]
-local function applyChange(self, change)
-	-- cloned so a listener that disconnects itself does not mutate the array being iterated
-	local listeners = table.clone(self.changedListeners)
+function Scope:addPlayer(player: Player)
+	if table.find(self.players, player) then
+		error(`player {player.Name} is already synced to this scope.`)
+	end
+	if table.find(self.joining, player) then
+		error(`player {player.Name} is already waiting on a snapshot from this scope.`)
+	end
+	table.insert(self.joining, player)
+end
 
-	local function fire(key, value)
-		for _, listener in listeners do
-			listener(key, value)
+function Scope:removePlayer(player: Player)
+	local i = table.find(self.players, player)
+	if i then
+		table.remove(self.players, i)
+		return
+	end
+
+	-- a player can leave before their snapshot has gone out
+	i = table.find(self.joining, player)
+	if i then
+		table.remove(self.joining, i)
+		return
+	end
+
+	error(`player {player.Name} is not in this scope.`)
+end
+
+function Scope:broadcastNew(handle: ServerHandle<any>)
+	if not handle._inqueue then
+		handle._inqueue = packetActionNew
+		table.insert(self.broadcasts, handle)
+	end
+end
+
+function Scope:broadcastRevise(handle: ServerHandle<any>)
+	-- a queued New already carries the whole table, so a revise on top of it adds nothing.
+	if not handle._inqueue then
+		handle._inqueue = packetActionRevise
+		table.insert(self.broadcasts, handle)
+	end
+end
+
+function Scope:broadcastDelete(handle: ServerHandle<any>)
+	if handle.online then
+		error(`handle {handle.id} is still online. Call handle:setOnline(false) first.`)
+	end
+
+	if handle._inqueue == packetActionNew then
+		--[[
+			The table went online and offline inside one heartbeat, so no client ever saw it
+			and a delete would name an id they do not have. Cancel instead. The stale queue
+			entry is skipped by processBroadcasts rather than removed from the array.
+		]]
+		handle._inqueue = false
+		handle._serialized = nil
+		return
+	end
+
+	if not handle._inqueue then
+		table.insert(self.broadcasts, handle)
+	end
+	handle._inqueue = packetActionDelete
+end
+
+function Scope:processBroadcasts()
+	-- 1. the delta packet, shared by every already-synced player.
+	table.clear(self.packet)
+	for i = 1, #self.broadcasts do
+		local h: ServerHandle<any> = self.broadcasts[i]
+		local action = h._inqueue
+		if not action then
+			-- cancelled by broadcastDelete, or a stale duplicate entry
+			continue
+		end
+
+		if action == packetActionNew then
+			table.insert(self.packet, newItem(h))
+		else
+			table.insert(self.packet, {h.id, action, h._serialized})
+		end
+
+		h._inqueue = false
+		h._serialized = nil
+	end
+	table.clear(self.broadcasts)
+
+	if #self.packet > 0 then
+		for _, player in self.players do
+			remotePacket:FireClient(player, self.packet)
 		end
 	end
 
-	if change.kind == "write" then
-		if change.set then
-			for key, value in change.set do
-				if self.data[key] ~= value then
-					self.data[key] = value
-					fire(key, value)
+	-- 2. the snapshot, built once no matter how many players joined this heartbeat.
+	if #self.joining > 0 then
+		local snapshot = {}
+		for _, h in self.handles do
+			table.insert(snapshot, newItem(h))
+		end
+
+		for _, player in self.joining do
+			remoteSync:FireClient(player, snapshot)
+			-- promoted last: a joiner must not receive the delta fired above
+			table.insert(self.players, player)
+		end
+		table.clear(self.joining)
+	end
+end
+--
+
+-- Server handle --
+local ServerHandle = {}
+ServerHandle.__index = ServerHandle
+
+export type ServerHandle<T> = setmetatable<{
+	id: string,
+	tag: string?,
+	data: T,
+	scope: any,
+	online: boolean,
+	_serialized: any,
+	_inqueue: boolean | string,
+}, {__index: typeof(ServerHandle)}>
+
+do
+	function handleFromData(data)
+		return getmetatable(data)
+	end
+
+	function newServerHandle<T>(scope, data: T, tag: string?): ServerHandle<T>
+		if handleFromData(data) then
+			error("data already has handle or other metatable.")
+		end
+
+		local self: ServerHandle<T> = setmetatable({
+			id = tostring(data),
+			scope = scope,
+			data = data,
+			online = false,
+			_serialized = nil,
+			_inqueue = false,
+			tag = tag,
+		}, ServerHandle)
+
+		setmetatable(data, self)
+
+		return self
+	end
+
+	function ServerHandle.get<T, K>(self: ServerHandle<T>, k: K): index<T, K>
+		return (self.data::any)[k]
+	end
+
+	function ServerHandle.set<T, K>(self: ServerHandle<T>, k: K, v: index<T, K>)
+		(self.data::any)[k] = v
+	end
+
+	function ServerHandle:subset(k, h: ServerHandle<any>)
+		-- TODO: properly type this ...
+		self.data[k] = h.data
+	end
+
+	function ServerHandle.subget<T, K>(self: ServerHandle<T>, k: K): ServerHandle<index<T, K>>
+		local v = (self.data::any)[k]
+		if type(v) == "table" then
+			local handle = handleFromData(v)
+			if handle then
+				return handle
+			end
+		end
+		error(`no valid sub-handle at key {k}`)
+	end
+
+	function ServerHandle:subinplace(k)
+		-- TODO: properly type this ...
+		local v = self.data[k]
+		if type(v) == "table" then
+			local handle = newServerHandle(self.scope, v)
+			return handle
+		end
+		error(`no valid sub-table at key {k} to create handle with.`)
+	end
+
+	--[[
+		Register or unregister this handle with its scope. The sole door into replication:
+		registry membership and queue state change together, here and nowhere else.
+
+		Going offline does not queue a delete. Telling already-synced players that a table is
+		gone is an explicit scope:broadcastDelete call, which must follow setOnline(false).
+	]]
+	function ServerHandle.setOnline(self: ServerHandle<any>, online: boolean)
+		if online == self.online then
+			return
+		end
+
+		self.online = online
+		if online then
+			self.scope.handles[self.id] = self
+			self.scope:broadcastNew(self)
+		else
+			self.scope.handles[self.id] = nil
+		end
+	end
+
+	function ServerHandle:_lazySerialized()
+		local serialized = self._serialized
+		if not serialized then
+			serialized = {}
+			self._serialized = serialized
+		end
+		return serialized
+	end
+
+	local function serializeValue(value: any): any
+		if type(value) == "string" then
+			local first = string.sub(value, 1, 1)
+			if first == fieldEscape or first == fieldSpecialPrefix then
+				return fieldEscape .. value
+			end
+			return value
+		elseif type(value) == "table" then
+			-- a data table's metatable IS its handle, so compare the handle to the class
+			local handle = handleFromData(value)
+			if not handle or getmetatable(handle) ~= ServerHandle then
+				error("a table value must be the data of a NetTable sub-handle.")
+			end
+			if not handle.online then
+				error(`sub-handle {handle.id} is offline, so no client can resolve it.`)
+			end
+			return fieldSpecialPrefix .. fieldSubPrefix .. handle.id
+		end
+		return value
+	end
+
+	--[[
+		Serialize a handle's whole table. Pure: it must not write into _serialized, which is
+		the revise accumulator and is dropped after every flush.
+	]]
+	function serializeFull(h: ServerHandle<any>): {[any]: any}
+		local serialized = {}
+		for k, v in (h.data :: any) do
+			serialized[k] = serializeValue(v)
+		end
+		return serialized
+	end
+
+	--[[
+		The single source of truth for a New item's wire shape. Used by both the delta packet
+		and the snapshot, so the two paths cannot drift apart.
+	]]
+	function newItem(h: ServerHandle<any>): {any}
+		return {
+			h.id,					-- [1]: NetTable id
+			packetActionNew,		-- [2]: action
+			serializeFull(h),		-- [3]: full table contents
+			h.tag,					-- [4]: lookup tag, if the handle has one
+		}
+	end
+
+	function ServerHandle:_serializeField(key, value)
+		local serialized = self:_lazySerialized()
+		serialized[key] = serializeValue(value)
+	end
+
+	function ServerHandle:_serializeClear(key, value)
+		table.clear(self._serialized)
+	end
+end
+--
+
+-- Client handle --
+--[[
+	Read side of a NetTable. Created and written only by incoming packets; game code reads it
+	with get / subget and hears about changes through listen.
+]]
+local ClientHandle = {}
+ClientHandle.__index = ClientHandle
+
+export type ClientHandle<T> = setmetatable<{
+	id: string,
+	data: T,
+	listeners: {(key: any, value: any) -> ()},
+}, {__index: typeof(ClientHandle)}>
+
+local clientHandles: {[string]: ClientHandle<any>} = {}
+local newClientHandle
+
+do
+	function newClientHandle<T>(id: string, data: T): ClientHandle<T>
+		if clientHandles[id] then
+			error(`client handle {id} already exists.`)
+		end
+		if handleFromData(data) then
+			error("data already has handle or other metatable.")
+		end
+
+		local self = setmetatable({
+			id = id,
+			data = data,
+			listeners = {},
+		}, ClientHandle)
+
+		setmetatable(data :: any, self)
+		clientHandles[id] = self
+
+		return self
+	end
+
+	function ClientHandle.get<T, K>(self: ClientHandle<T>, k: K): index<T, K>
+		return (self.data::any)[k]
+	end
+
+	function ClientHandle.subget<T, K>(self: ClientHandle<T>, k: K): ClientHandle<index<T, K>>
+		local v = (self.data::any)[k]
+		if type(v) == "table" then
+			local handle = handleFromData(v)
+			if handle then
+				return handle
+			end
+		end
+		error(`no valid sub-handle at key {k}`)
+	end
+
+	--[[
+		Call back with (key, value) every time a field of this table changes from the server.
+		Returns a function that removes the listener.
+	]]
+	function ClientHandle.listen<T>(self: ClientHandle<T>, callback: (key: any, value: any) -> ()): () -> ()
+		table.insert(self.listeners, callback)
+		return function()
+			local i = table.find(self.listeners, callback)
+			if i then
+				table.remove(self.listeners, i)
+			end
+		end
+	end
+
+	function ClientHandle:_receiveField(k, v)
+		self.data[k] = v
+		-- clone so a listener can disconnect itself mid-dispatch
+		for _, callback in table.clone(self.listeners) do
+			callback(k, v)
+		end
+	end
+end
+
+-- Reverses serializeValue. A sub-table reference must name a table the client already has.
+local function deserializeValue(value: any): any
+	if type(value) == "string" then
+		local first = string.sub(value, 1, 1)
+		if first == fieldEscape then
+			return string.sub(value, 2)
+		elseif first == fieldSpecialPrefix then
+			local kind = string.sub(value, 2, 2)
+			if kind == fieldSubPrefix then
+				local id = string.sub(value, 3)
+				local handle = clientHandles[id]
+				if not handle then
+					error(`sub-table reference to unknown NetTable {id}`)
 				end
+				return handle.data
 			end
+			error(`unknown special packet value {value}`)
 		end
-
-		if change.removed then
-			for _, key in change.removed do
-				if self.data[key] ~= nil then
-					self.data[key] = nil
-					fire(key, nil)
-				end
-			end
-		end
-	elseif change.kind == "insert" then
-		table.insert(self.data, change.index, change.value)
-
-		for index = change.index, #self.data do
-			fire(index, self.data[index])
-		end
-	elseif change.kind == "removeAt" then
-		local previousLength = #self.data
-		table.remove(self.data, change.index)
-
-		for index = change.index, #self.data do
-			fire(index, self.data[index])
-		end
-		-- the array is one shorter, so the old last index now holds nothing
-		fire(previousLength, nil)
-	else
-		error(`Unknown NetTable change kind "{tostring(change.kind)}".`)
 	end
+	return value
+end
+
+local function receiveTable(id: string, serialized: {[any]: any})
+	local data = {}
+	for k, v in serialized do
+		data[k] = deserializeValue(v)
+	end
+	newClientHandle(id, data)
+end
+
+local function receiveField(id: string, k: any, v: any)
+	local handle = clientHandles[id]
+	if not handle then
+		error(`field update for unknown NetTable {id}`)
+	end
+	handle:_receiveField(k, deserializeValue(v))
+end
+
+local function receiveDelete(id: string)
+	if not clientHandles[id] then
+		error(`delete for unknown NetTable {id}`)
+	end
+	clientHandles[id] = nil
 end
 
 --[[
-	Apply a change locally and replicate it, or send it to the server to do so. The single
-	place that decides which side a write happens on.
+	Apply a full-state snapshot of a scope. Two passes, because the server builds a snapshot by
+	iterating a hash map: a table may arrive before the sub-table it references. Creating every
+	table empty first means every /S<id> reference resolves in the second pass, whatever order
+	the items happen to be in.
 ]]
-local function submit(self, change)
-	if IS_SERVER then
-		applyChange(self, change)
-		syncRemote:FireAllClients(self.id, change)
-	else
-		pushRemote:FireServer(self.id, change)
-	end
-end
-
--- class --
-
---[[
-	Create a table under a unique id. Server only: clients get their copies through
-	replication. Call activate() to publish it.
-]]
-function NetTable.new(scope: string, id: string)
-	assert(IS_SERVER, "NetTable.new is server only; clients receive tables through replication.")
-
-	return construct(scope, id)
-end
-
---[[
-	Publish the table: register it for lookup and replicate it to every client.
-]]
-function NetTable:activate()
-	local scopeTable = tables[self.scope]
-	if scopeTable and scopeTable[self.id] then
-		error(`[NetTable:activate] NetTable {self.scope}/{self.id} already activated.`)
-	end
-	
-	-- lazy build scope container
-	if not scopeTable then
-		scopeTable = {}
-		tables[self.scope] = scopeTable
+local function receiveSync(items: {{any}})
+	for _, item in items do
+		newClientHandle(item[1] :: string, {})
 	end
 
-	scopeTable[self.id] = self
-	syncRemote:FireAllClients(self.scope, self.id, { kind = "write", set = self.data })
-
-	announce(addedListeners, self)
-end
-
---[[
-	Unpublish the table and drop it from every client.
-]]
-function NetTable:destroy()
-	local scopeTable = tables[self.scope]
-	if scopeTable then
-		scopeTable[self.id] = nil
-	end
-
-	table.clear(self.changedListeners)
-
-	if IS_SERVER then
-		syncRemote:FireAllClients(self.scope, self.id, nil)
-	end
-
-	announce(removedListeners, self)
-end
-
-function NetTable:get(key)
-	return self.data[key]
-end
-
---[[
-	The array length of the table. Meaningless for a dictionary.
-]]
-function NetTable:length(): number
-	return #self.data
-end
-
---[[
-	A copy of the whole table, safe to hold and mutate.
-]]
-function NetTable:snapshot()
-	return table.clone(self.data)
-end
-
---[[
-	Set one key. Use remove() to clear one; nil is not a value.
-]]
-function NetTable:set(key, value)
-	assert(isValidKey(key), `NetTable key must be a string or number, got {typeof(key)}.`)
-	assert(value ~= nil, `Use NetTable:remove("{key}") to clear a key.`)
-	assert(isValidValue(value), `NetTable values must be scalars, got {typeof(value)} for key "{key}".`)
-
-	self:setMany({ [key] = value })
-end
-
---[[
-	Set several keys as one replicated change.
-]]
-function NetTable:setMany(values)
-	for key, value in values do
-		assert(isValidKey(key), `NetTable key must be a string or number, got {typeof(key)}.`)
-		assert(isValidValue(value), `NetTable values must be scalars, got {typeof(value)} for key "{key}".`)
-	end
-
-	submit(self, { kind = "write", set = values })
-end
-
---[[
-	Clear one key. For arrays this leaves a hole; use removeAt to close it.
-]]
-function NetTable:remove(key)
-	assert(isValidKey(key), `NetTable key must be a string or number, got {typeof(key)}.`)
-
-	submit(self, { kind = "write", removed = { key } })
-end
-
--- array operations --
-
---[[
-	Add a value to the end of the array.
-]]
-function NetTable:append(value)
-	assert(isValidValue(value), `NetTable values must be scalars, got {typeof(value)}.`)
-
-	if IS_SERVER then
-		submit(self, { kind = "insert", index = #self.data + 1, value = value })
-	else
-		-- the client does not pick the index. Its mirror may be shorter than the server's
-		-- array, and an index resolved here would land in the wrong slot.
-		submit(self, { kind = "append", value = value })
-	end
-end
-
---[[
-	Insert a value at an index, shifting everything at and above it up. One network send
-	regardless of how much it shifts.
-]]
-function NetTable:insert(index: number, value)
-	assert(isValidIndex(index), `NetTable index must be a positive integer, got {tostring(index)}.`)
-	assert(index <= #self.data + 1, `NetTable index {index} is past the end of an array of {#self.data}.`)
-	assert(isValidValue(value), `NetTable values must be scalars, got {typeof(value)}.`)
-
-	submit(self, { kind = "insert", index = index, value = value })
-end
-
---[[
-	Remove the value at an index, shifting everything above it down. One network send
-	regardless of how much it shifts.
-]]
-function NetTable:removeAt(index: number)
-	assert(isValidIndex(index), `NetTable index must be a positive integer, got {tostring(index)}.`)
-	assert(index <= #self.data, `NetTable index {index} is past the end of an array of {#self.data}.`)
-
-	submit(self, { kind = "removeAt", index = index })
-end
-
---[[
-	Call callback(key, value) whenever a key changes, with value nil when it is removed.
-	Returns a function that disconnects the listener.
-]]
-function NetTable:onChanged(callback)
-	table.insert(self.changedListeners, callback)
-
-	return function()
-		local index = table.find(self.changedListeners, callback)
-		if index then
-			table.remove(self.changedListeners, index)
+	for _, item in items do
+		local handle = clientHandles[item[1] :: string]
+		for k, v in (item[3] :: {[any]: any}) do
+			handle.data[k] = deserializeValue(v)
 		end
 	end
 end
+--
 
--- system --
+-- Client module --
+local Client = {}
 
---[[
-	The table under this name, or nil if it does not exist yet. On the client that
-	includes tables that exist on the server but have not replicated yet, so startup code
-	uses onAdded instead.
-]]
-function NetTable.find(name: string)
-	return tables[name]
+Client.awaitQueue = {}
+
+function Client.init()
+	if not RunService:IsClient() then
+		error("Can only run NetTable.Client on client.")
+	end
+	remoteSync.OnClientEvent:Connect(receiveSync)
+	-- TODO: connect remotePacket to receiveTable / receiveField / receiveDelete.
+end
+
+function Client.find(id: string): ClientHandle<any>?
+	return clientHandles[id]
 end
 
 --[[
-	Call callback(netTable) for every table, including ones that already exist. Returns a
-	function that disconnects the listener.
+	Get or await recieving a handle with a specific tag.
+	Snapshot items carry the tag at [4], so this can now be built. Waiters must only be resumed
+	once receiveSync's second pass is done, or they observe an empty table.
 ]]
-function NetTable.onAdded(callback)
-	table.insert(addedListeners, callback)
+function Client.await(tag: string)
 
-	for _, netTable in table.clone(tables) do
-		callback(netTable)
+end
+
+function Client.get(id: string): ClientHandle<any>
+	local handle = clientHandles[id]
+	if not handle then
+		error(`no NetTable with id {id}`)
 	end
+	return handle
+end
+--
 
-	return function()
-		local index = table.find(addedListeners, callback)
-		if index then
-			table.remove(addedListeners, index)
-		end
+-- Server module --
+local Server = {}
+
+function Server.init()
+	if not RunService:IsServer() then
+		error("Can only run NetTable.Client on server.")
 	end
 end
 
---[[
-	Call callback(netTable) when a table is destroyed. Returns a function that
-	disconnects the listener.
-]]
-function NetTable.onRemoved(callback)
-	table.insert(removedListeners, callback)
-
-	return function()
-		local index = table.find(removedListeners, callback)
-		if index then
-			table.remove(removedListeners, index)
-		end
-	end
+function Server.handle<T>(scope, data: T): ServerHandle<T>
+	return newServerHandle(scope, data)
 end
+--
 
-local function onSync(name, change)
-	local netTable = tables[name]
-
-	-- no change is the server saying the table is gone
-	if change == nil then
-		if netTable then
-			netTable:destroy()
-		end
-		return
-	end
-
-	if netTable then
-		applyChange(netTable, change)
-		return
-	end
-
-	netTable = construct(name)
-	tables[name] = netTable
-	applyChange(netTable, change)
-
-	announce(addedListeners, netTable)
-end
-
---[[
-	Whether a change from a client is well formed. Shape only; whether it may be applied to
-	a particular table is checked separately.
-]]
-local function isValidChange(change): boolean
-	if typeof(change) ~= "table" then
-		return false
-	end
-
-	if change.kind == "write" then
-		if change.set ~= nil then
-			if typeof(change.set) ~= "table" then
-				return false
-			end
-			for key, value in change.set do
-				if not isValidKey(key) or not isValidValue(value) then
-					return false
-				end
-			end
-		end
-
-		if change.removed ~= nil then
-			if typeof(change.removed) ~= "table" then
-				return false
-			end
-			for _, key in change.removed do
-				if not isValidKey(key) then
-					return false
-				end
-			end
-		end
-
-		return true
-	elseif change.kind == "insert" then
-		return isValidIndex(change.index) and isValidValue(change.value)
-	elseif change.kind == "append" then
-		return isValidValue(change.value)
-	elseif change.kind == "removeAt" then
-		return isValidIndex(change.index)
-	end
-
-	return false
-end
-
-local function onPush(player, name, change)
-	-- validate
-	if typeof(name) ~= "string" or not isValidChange(change) then
-		return
-	end
-
-	-- resolve
-	local netTable = tables[name]
-	if not netTable then
-		return
-	end
-
-	-- authorize
-	if not netTable.clientWritable then
-		return
-	end
-
-	-- an index past the end would shift the array somewhere the client did not intend, so
-	-- it is rejected rather than clamped
-	if change.kind == "insert" and change.index > #netTable.data + 1 then
-		return
-	end
-	if change.kind == "removeAt" and change.index > #netTable.data then
-		return
-	end
-
-	-- append is resolved against the server's array, never the client's mirror, and is
-	-- replicated as an ordinary insert
-	if change.kind == "append" then
-		change = { kind = "insert", index = #netTable.data + 1, value = change.value }
-	end
-
-	-- act
-	applyChange(netTable, change)
-	syncRemote:FireAllClients(name, change)
-end
-
-function NetTable.init()
-end
-
-function NetTable.start()
-	assert(not started, "NetTable has already started.")
-	started = true
-
-	if IS_SERVER then
-		pushRemote.OnServerEvent:Connect(onPush)
-
-		requestRemote.OnServerEvent:Connect(function(player)
-			for name, netTable in tables do
-				syncRemote:FireClient(player, name, { kind = "write", set = netTable.data })
-			end
-		end)
-	else
-		syncRemote.OnClientEvent:Connect(onSync)
-		-- tables that already exist were replicated before this client could listen
-		requestRemote:FireServer()
-	end
-end
+NetTable.Client = Client
+NetTable.Server = Server
 
 return NetTable
