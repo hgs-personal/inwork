@@ -24,3 +24,4 @@
 - `docs/AGENTS.md` — how to work in this repo: orientation, manual Studio validation workflow, current known-broken state, model authoring requirements. Read first.
 - `docs/ARCHITECTURE.md` — module map, layer boundaries, the plane system, the authority/replication model, and where new systems belong.
 - `docs/DESIGN.md` — game design vision and open design questions. Proposal, not settled spec.
+- `docs/CORE_LIBRARY.md` — WIP plan for extracting `src/Core` into a shared submodule library. Not started.

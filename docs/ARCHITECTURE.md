@@ -82,85 +82,119 @@ rather than caching it.
 
 ### NetTable (`Core/NetTable`)
 
-Named, flat Luau tables replicated between the server and every client over remotes. Keys
-are strings or numbers, values are scalars; nested tables assert. Dictionaries and arrays
-both work, since an array is just number keys. One level only — that is the whole scope
-for now.
+Flat Luau tables replicated server → client. Keys are strings or numbers, values are
+scalars or a reference to another NetTable; anything else asserts. Dictionaries and arrays
+both work, since an array is just number keys.
 
-The server owns every table. Clients hold mirrors, and may write only to a table the
-server marked `clientWritable`.
+Three objects, and the split between them is the thing to understand:
+
+- a **handle** is one replicated table. It owns an id, an optional lookup tag, and the
+  Luau table itself. The data table's metatable *is* its handle, which is how a value that
+  points at another NetTable is recognised and serialized as a reference.
+- a **scope** is a set of handles plus the set of players who receive them. Replication is
+  per scope, not per handle or per table name. A player-private table is a scope with one
+  player in it; a table shared by everyone is a scope everyone is added to.
+- on the client a handle is also the **event surface** for its table.
 
 ```lua
 -- server
-local settings = NetTable.new("settings")
-settings.clientWritable = true
-settings:activate()             -- publishes it: registers the name and syncs to clients
-settings:set("maxCargo", 12)
-settings:setMany({ a = 1, b = 2 })   -- one replicated change
-settings:remove("a")                 -- clears a key; leaves a hole in an array
+local scope = NetTable.Server.scope()
+local data = { money = 1000 }
+local handle = NetTable.Server.handle(scope, data, "sessionData")  -- tag is optional
 
--- array operations. new() is server only, but the operations work from either side
-local queue = NetTable.new("queue")
-queue:append("c")
-queue:insert(1, "a")                 -- shifts everything up
-queue:removeAt(2)                    -- shifts everything down
-queue:length()
+handle:setOnline(true)        -- publish: into the scope's registry, and queue a New
+scope:addPlayer(player)       -- they get a snapshot on the next heartbeat, then deltas
+scope:activate()              -- start heartbeating
 
--- either side
-local settings = NetTable.find("settings")   -- nil if it has not replicated yet
-settings:get("maxCargo")
-settings:snapshot()                          -- copy of the whole table
-local disconnect = settings:onChanged(function(key, value) end)  -- value nil = removed
+handle:set("money", 1500)     -- replicates
+handle:remove("money")        -- clears the key; leaves a hole in an array
+handle:get("money")
 
--- client startup, since a table arrives some time after the client starts
-NetTable.onAdded(function(netTable) end)     -- also replays tables that already exist
-NetTable.onRemoved(function(netTable) end)
+local sub = NetTable.Server.handle(scope, { crates = 2 })
+sub:setOnline(true)           -- a referenced table must be online, or serializing errors
+handle:subset("inventory", sub)
+handle:subget("inventory")    -- the sub-handle
+handle:subinplace("cargo")    -- hand a plain nested table its own handle
+
+handle:destroy()              -- offline, delete to everyone holding it, data detached
+scope:destroy()
 ```
 
-It is a class (`new`/`activate`/`destroy`) and a system (`init`/`start`) in one module, on
-both sides. The module-level lookup is `NetTable.find(name)`, not `get`, because
-`netTable:get(key)` is the object method and the `__index` pattern gives the two one
-table.
+```lua
+-- client
+NetTable.Client.init()
 
-Four design points worth knowing before changing it:
+local handle = NetTable.Client.await("sessionData")   -- yields until it arrives
+NetTable.Client.findTag("sessionData")                -- nil if not here yet
+NetTable.Client.find(id) / NetTable.Client.get(id)    -- get errors, find returns nil
 
-- **A client's `set` does not touch its own copy.** It sends the write and waits for the
-  change to arrive back through the normal sync. The contents have exactly one authority,
-  and a rejected write can never leave a client disagreeing with the server. The cost is a
-  round trip before the client sees its own write.
-- **Clients ask for a snapshot at startup.** `NetTable.start()` on the client fires
-  `Request`, because tables published before that client connected its handler would
-  otherwise be missed. `applyChange` skips keys whose value is unchanged, so the snapshot
-  racing a live sync fires no duplicate change events.
-- **`clientWritable` is not replicated.** It is read only on the server; the field on a
-  mirror is always false.
-- **Array operations send the operation, not its consequences.** `removeAt(3)` on a
-  200-entry array is one small packet, not 198 index writes. Locally it still expands into
-  a changed event per shifted index, so a listener keyed on index stays correct and nothing
-  is silently missed — the compaction is a wire optimization, not a change in local
-  semantics. If a consumer ever needs the structural form (to move a UI row rather than
-  rebuild the rows above it), that is a second listener channel, added then.
+handle:get("money")
+handle:listen("money", function(value, old) end)      -- one field
+handle:listenAll(function(key, value, old) end)       -- any field
+handle:onDestroyed(function() end)                    -- this table only
 
-Remotes live under `Remotes/NetTable`: `Sync` (server → client), `Push` and `Request`
-(client → server). Every change travels as a single Change table on a single remote, which
-is what keeps writes and array operations ordered relative to each other:
-
-```
-{ kind = "write",    set = {...}?, removed = {...}? }
-{ kind = "insert",   index = n, value = v }
-{ kind = "removeAt", index = n }
-{ kind = "append",   value = v }        -- client -> server only
+NetTable.Client.onTag("sessionData", function(h) end)
+NetTable.Client.onAdded(function(h) end)              -- every table, tagged or not
+NetTable.Client.onRemoved(function(h) end)
 ```
 
-A `Sync` with no change means the table was destroyed. `append` exists only on the push
-path: a client's mirror may be shorter than the server's array, so the client sends no
-index and the server resolves one against its own length, replicating the result as an
-ordinary `insert`. A client-supplied `insert` or `removeAt` index *is* honoured, and is
-rejected rather than clamped when it is past the end.
+Every listener returns a connection; `connection:disconnect()` removes it. The events are
+`Core/Util/Signal` objects (stravant's GoodSignal, typed and camelCased), so a listener may
+yield.
 
-The `Push` handler follows the validate / resolve / authorize / act shape below, with
-`clientWritable` as the whole authorization rule — there is no per-player ownership yet.
-Adding it is the obvious next step if any table becomes economically meaningful.
+Both sides are a class and a system in one module, split into `NetTable.Server` and
+`NetTable.Client`. `Server.init` and `Client.init` are the system halves; the entry scripts
+call whichever side they are on.
+
+Points worth knowing before changing it:
+
+- **A tag is unique.** At most one live handle holds a given tag, which is what lets
+  `await` resolve to exactly one handle. A second live table claiming a held tag errors.
+- **Arrival is not a field change.** A handle is fully populated before anything can hold
+  it, so initial contents are read with `get` and there is no per-key replay. A field event
+  always means "changed since you last looked". `onAdded` / `onTag` do not replay tables
+  that are already here either — that is what `await` and `findTag` are for.
+- **A scope's two outbound paths per heartbeat.** The delta packet is built once and shared
+  by every already-synced player; a full snapshot is built once from the scope's live
+  handles and sent only to players added since the last heartbeat. A joining player is
+  promoted into the delta recipients *after* their snapshot goes out, so they never receive
+  a change for a table they do not hold yet.
+- **The broadcast queue is drained every heartbeat, recipients or not.** A handle's
+  `_inqueue` flag is what makes a second broadcast in one frame a no-op, so leaving it set
+  because nobody was listening would permanently stop that handle from broadcasting.
+- **Incoming New items are applied in three passes.** Both the snapshot and the packet are
+  built by iterating a set, so a table can be listed before the sub-table it references.
+  Every table is created empty, then filled, then announced. The announce pass is last
+  because an `await` waiter resumed mid-fill would observe a half-built table.
+- **An offline handle writes locally and queues nothing.** No client holds the table, and
+  going online serializes the whole table again, so there is nothing for a delta to add.
+
+Remotes live under `Remotes/NetTable`: `Sync` (full snapshot for a joiner) and `Packet`
+(one heartbeat's deltas), both server → client. Wire shapes are positional arrays:
+
+```
+{ id, "N", { full contents }, tag? }   -- new table
+{ id, "R", { changed fields } }        -- revise
+{ id, "D" }                            -- delete
+```
+
+Field values are scalars except for two sentinels: `/S<id>` is a reference to another
+NetTable, and `/D` is a field removal, which cannot travel as a nil because a nil in the
+accumulator is indistinguishable from a key that was never written. A string whose first
+character is `%` or `/` is escaped with a leading `%`.
+
+An id is a server-assigned counter written in base 94 over printable ASCII
+(`CoreUtil.Encode.toBase94`), so it is one character for the first 94 tables and three below
+830,584. It is deliberately *not* `tostring(data)`: a table's address is 26 characters per
+reference, hands clients the server's heap layout, and is recycled by the collector, so a
+table freed and reallocated between a destroy and the delta going out could reuse the id of
+one whose delete has not been sent yet. Ids are opaque — nothing but the server's counter
+should ever construct one.
+
+**Client → server writes are deferred.** There is no push remote and no `clientWritable`.
+When a client needs to change server state it goes through a purpose-built remote with its
+own validation, following the validate / resolve / authorize / act shape below. Adding a
+generic write path would mean per-table authorization, which nothing needs yet.
 
 ### NetTable or attributes
 
@@ -171,8 +205,9 @@ They are not interchangeable:
   thing in the world stays on attributes: it gets free late-join, free continuity across a
   pilot swap, and it is visible in Studio.
 - **NetTable** is for state with no Instance to hang on — session or player-scoped data
-  such as economy, market prices, or settings — and for anything a client needs to write.
-  Attributes only replicate server → client; a client writing one stays local.
+  such as economy, market prices, or settings — and for anything a client needs to react to
+  structurally, since a handle carries per-field and whole-table events and attributes carry
+  one changed signal per attribute. Both replicate server → client only.
 
 ## Code structure conventions
 

@@ -140,9 +140,11 @@ Beyond CLAUDE.md, things specific to this project that are easy to get wrong:
 Generic helpers belong in one place, `Core/Util`, so they get found and reused instead of
 rewritten in slightly different forms across modules.
 
-Current contents: `Core/Util/init.luau` returns a `CoreUtil` table with domain namespaces.
-Today there is one, `CoreUtil.Parts` (`weldPartsSimple`, `weldModelSimple`,
-`makePartsEffectOnly`), used by `Modules/Propeller`.
+Current contents: `Core/Util/init.luau` returns a `CoreUtil` table with domain namespaces
+(`Inst`, `Parts`, `Sound`, `Validate`, `Math`, `Encode`) plus `mergeArray`, and requires the
+child modules explicitly. The child modules are `Core/Util/Log` (tagged, levelled logging) and
+`Core/Util/Signal` (stravant's GoodSignal, typed and camelCased), both of which are also
+required directly by path where a module wants just one of them.
 
 A helper belongs in `Core/Util` when both of these are true:
 
