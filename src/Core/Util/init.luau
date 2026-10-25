@@ -85,7 +85,11 @@ end
 --
 
 -- Math --
-CoreUtil.Math = {}
+CoreUtil.Math = {
+	-- Useful constants
+	MAX_INT = math.pow(2, 53),
+	MIN_INT = -math.pow(2, 53),
+}
 
 --[[
 	One pole of exponential decay over dt seconds, with a time constant of tau. Framerate
@@ -100,49 +104,51 @@ end
 -- Compact integer <-> string encoding --
 CoreUtil.Encode = {}
 
-local BASE94_FIRST = 33		-- '!', the first printable non-space ASCII character
-local BASE94_DIGITS = 94	-- through '~' at 126, so every digit survives a log line intact
+local BASE64_FIRST = 33		-- '!', the first printable non-space ASCII character
+local BASE64_MAX = 2^53		-- the largest integer a double represents exactly
 
 --[[
-	Write a non-negative integer in base 94 over printable ASCII, most significant digit first.
-	Base 94 is the widest alphabet that stays printable, which keeps an encoded value a quarter
-	the length of its decimal form without making it unreadable in output: one character below 94,
-	two below 8836, three below 830,584.
-
-	Exact up to 2^53, the point where a Luau number stops representing every integer.
+	Lua positive integer double to base 64.
+	Output: 9 character string.
+	Note: Retarded mfing claude implemented this doing two table allocations and a reverse.
 ]]
-function CoreUtil.Encode.toBase94(value: number): string
+function CoreUtil.Encode.intToB64(value: number): string
 	if value < 0 or value ~= math.floor(value) then
-		error(`base 94 encoding needs a non-negative integer, got {value}`)
+		error(`base 64 encoding needs a non-negative integer, got {value}`)
+	end
+	if value > BASE64_MAX then
+		error(`base 64 encoding needs a value at or below 2^53, got {value}`)
 	end
 
-	local digits: {string} = {}
-	repeat
-		-- built least significant first, so the loop below reverses it
-		table.insert(digits, string.char(BASE94_FIRST + value % BASE94_DIGITS))
-		value = math.floor(value / BASE94_DIGITS)
-	until value == 0
+	local output = ""
+	local d = 64^8
 
-	local reversed: {string} = table.create(#digits)
-	for i = #digits, 1, -1 do
-		table.insert(reversed, digits[i])
+	for i = 1, 9 do
+		local q = math.floor(value / d) % 64
+		output ..= string.char(q + BASE64_FIRST)
+		d /= 64
 	end
-	return table.concat(reversed)
+
+	return output
 end
 
--- Reverses toBase94. Errors on anything that is not a run of base 94 digits.
-function CoreUtil.Encode.fromBase94(encoded: string): number
+--[[
+	Base64 to lua positive integer (double type).
+	Output: Lua double.
+	Note: If #encouded > 9 precision will fall quickly.
+]]
+function CoreUtil.Encode.intFromB64(encoded: string): number
 	if #encoded == 0 then
-		error("base 94 decoding needs at least one digit.")
+		error("base 64 decoding needs at least one digit.")
 	end
 
 	local value = 0
 	for i = 1, #encoded do
-		local digit = string.byte(encoded, i) - BASE94_FIRST
-		if digit < 0 or digit >= BASE94_DIGITS then
-			error(`{string.sub(encoded, i, i)} is not a base 94 digit.`)
+		local digit = string.byte(encoded, i) - BASE64_FIRST
+		if digit < 0 or digit >= 64 then
+			error(`{string.sub(encoded, i, i)} is not a base 64 digit.`)
 		end
-		value = value * BASE94_DIGITS + digit
+		value = value * 64 + digit
 	end
 	return value
 end

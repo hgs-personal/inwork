@@ -11,7 +11,7 @@ export type LogConfig = {
 	level: number?,		-- cutoff messages below this filter specified
 }
 
-Log.SET_LEVEL_GLOBAL = 10
+Log.SET_LEVEL_GLOBAL = 0
 
 function Log.new(config: LogConfig): Log
 	config.level = config.level or Log.SET_LEVEL_GLOBAL

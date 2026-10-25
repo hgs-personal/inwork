@@ -7,6 +7,11 @@
 
 local Test = {}
 
+local RunService = game:GetService("RunService")
+		local isServer = RunService:IsServer()
+
+local log = require("./Util/Log").new({tag = "Test|" .. if isServer then "Server" else "Client"})
+
 export type TestCase = {
 	name: string,
 	enabled: boolean,
@@ -22,22 +27,22 @@ function Test.run(collectionName: string, tests: { TestCase }): number
 	local failed = 0
 	local skipped = 0
 
-	print(string.format("[Test] running %d %s tests", #tests, collectionName))
+	log:printf("running %d %s tests", nil, #tests, collectionName)
 
 	for _, test in tests do
 		if not test.enabled then
 			skipped += 1
-			print(string.format("[Test] SKIP %s", test.name))
+			log:printf("SKIP %s", nil, test.name)
 			continue
 		end
 
 		local ok, err = xpcall(test.run, debug.traceback)
 		if ok then
 			passed += 1
-			print(string.format("[Test] PASS %s", test.name))
+			log:printf("PASS %s", nil, test.name)
 		else
 			failed += 1
-			warn(string.format("[Test] FAIL %s\n%s", test.name, tostring(err)))
+			log:printf("[Test] FAIL %s\n%s", nil, test.name, tostring(err))
 		end
 	end
 
