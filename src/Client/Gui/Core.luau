@@ -3,7 +3,7 @@
 ]]
 local GuiCore = {}
 
-local Fusion = require("@game/ReplicatedStorage/Core/Fusion")
+local Fusion = require("@game/ReplicatedStorage/Vendor/Fusion")
 
 -- re-exports --
 GuiCore.Fusion = Fusion

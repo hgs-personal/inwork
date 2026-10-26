@@ -12,7 +12,7 @@ PilotLayer.__index = PilotLayer
 
 local UserInputService = game:GetService("UserInputService")
 
-local Fusion = require("@game/ReplicatedStorage/Core/Fusion")
+local Fusion = require("@game/ReplicatedStorage/Vendor/Fusion")
 	local CHILDREN = Fusion.Children
 local GuiCore = require("./Core")
 	local UDIM2_MID = GuiCore.UDIM2_MID

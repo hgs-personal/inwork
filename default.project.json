@@ -13,7 +13,10 @@
         "$path": "src/Modules"
       },
       "Core": {
-        "$path": "src/Core",
+        "$path": "src/Core"
+      },
+      "Vendor": {
+        "$className": "Folder",
         "Fusion": {
           "$path": "vendor/Fusion"
         }

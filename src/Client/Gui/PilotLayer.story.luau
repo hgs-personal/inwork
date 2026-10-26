@@ -1,4 +1,4 @@
-local Fusion = require("@game/ReplicatedStorage/Core/Fusion")
+local Fusion = require("@game/ReplicatedStorage/Vendor/Fusion")
 
 local PilotLayer = require("./PilotLayer")
 

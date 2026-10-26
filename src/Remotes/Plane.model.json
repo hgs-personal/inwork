@@ -1,12 +1,17 @@
 {
     "ClassName": "Folder",
-    "RequestEngine": {
+    "Children": [
+    {
+        "Name": "RequestEngine",
         "ClassName": "RemoteEvent"
     },
-    "SetThrottle": {
+    {
+        "Name": "SetThrottle",
         "ClassName": "RemoteEvent"
     },
-    "ReportImpact": {
+    {
+        "Name": "ReportImpact",
         "ClassName": "RemoteEvent"
     }
+    ]
 }

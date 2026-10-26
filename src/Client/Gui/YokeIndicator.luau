@@ -4,7 +4,7 @@ local YokeIndicator = {}
 	TODO: tie visibility of the yoke indicator to a dominant input mode detector (keyboard / gamepad / touch).
 ]]
 
-local Fusion = require("@game/ReplicatedStorage/Core/Fusion")
+local Fusion = require("@game/ReplicatedStorage/Vendor/Fusion")
 	local CHILDREN = Fusion.Children
 
 local YOKE_MAX_Y = 0.8 -- range of screen covered by maximum yoke pull

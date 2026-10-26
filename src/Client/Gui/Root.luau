@@ -1,6 +1,6 @@
 local Root = {}
 
-local Fusion = require("@game/ReplicatedStorage/Core/Fusion")
+local Fusion = require("@game/ReplicatedStorage/Vendor/Fusion")
 -- top gui modules
 local PilotLayer = require("./PilotLayer")
 

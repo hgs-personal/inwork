@@ -1,20 +1,21 @@
 local ServerStorage = game:GetService("ServerStorage")
+local Players = game:GetService("Players")
 
 local NetTable = require("@game/ReplicatedStorage/Core/NetTable")
+local ObjectData = require("@game/ReplicatedStorage/Core/ObjectData")
 local PlaneSim = require("@game/ReplicatedStorage/Modules/PlaneSim")
 local Plane = require("@game/ServerScriptService/Server/Plane")
+local Session = require("@game/ServerScriptService/Server/Session")
 local Test = require("@game/ReplicatedStorage/Core/Test")
 local ServerTests = require("@game/ServerScriptService/Server/Tests")
 
--- CONSTANTS --
+-- Constants --
 -- run the server test procedures in Server/Tests once startup finishes
 local RUN_TESTS = true
 -- how long after a plane is destroyed before another appears. Placeholder, see spawnPlane.
 local PLANE_RESPAWN_DELAY = 5
 --
-
-NetTable.init()
-NetTable.start()
+NetTable.Server.init()
 
 PlaneSim.init()
 -- the server batch updates every plane's sim. A client simulates only the one it is flying.
@@ -51,6 +52,28 @@ local function buildPlane(model)
 end
 
 buildPlane(modelZ)
+
+-- Player session events --
+local function onPlayerAdded(player: Player)
+	ObjectData.add(player)
+	
+	local session = Session.onPlayerAdded(player)
+
+	session:push()
+end
+
+local function onPlayerRemoving(player: Player)
+	Session.onPlayerRemoving(player)
+	-- Final authority for dropping Player ObjectData index.
+	ObjectData.clear(player)
+end
+
+for _, player in Players:GetPlayers() do
+	onPlayerAdded(player)
+end
+Players.PlayerAdded:Connect(onPlayerAdded)
+Players.PlayerRemoving:Connect(onPlayerRemoving)
+--
 
 if RUN_TESTS then
 	Test.run("Server", ServerTests)

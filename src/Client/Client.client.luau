@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 
 local NetTable = require("@game/ReplicatedStorage/Core/NetTable")
+local ClientSession = require("@game/ReplicatedStorage/Client/ClientSession")
 local Replicator = require("@game/ReplicatedStorage/Core/Replicator")
 local Pilot = require("@game/ReplicatedStorage/Client/Plane/Pilot")
 local PlaneReplicator = require("@game/ReplicatedStorage/Client/Plane/PlaneReplicator")
@@ -63,17 +64,22 @@ end
 
 local function startup()
 	-- init client systems --
+
+	---- init modules (do not depend on async logic)
+	NetTable.Client.init()
+	ClientSession.init()
 	GuiRoot.init()
 
-	NetTable.init()
 	Replicator.init()
 	PlaneReplicator.init()
 	Pilot.init()
 
+	-- await critical startup flow points
+	ClientSession.awaitReady()
 
+
+	---- start modules (can now rely on post-async outputs)
 	GuiRoot.start()
-	-- before Replicator, so tagged objects created by its start can read replicated tables
-	NetTable.start()
 	Replicator.start()
 	--
 

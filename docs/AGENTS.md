@@ -135,6 +135,37 @@ Beyond CLAUDE.md, things specific to this project that are easy to get wrong:
 - **Multiple regions are deferred.** Don't implement stacked regions, sharding, or region
   transitions. The analysis is in ARCHITECTURE.md if the decision is revisited.
 
+## Comments and documentation
+
+Comments here are sparse and factual. The existing code is the reference: short module
+headers, comments only where the reason for something isn't visible in the code itself.
+Write less than you think you need.
+
+Specific things to avoid, all of which show up in generated code:
+
+- **Multi-paragraph module headers.** One or two lines saying what the module is and who
+  owns it. If a module needs more explanation than that, the explanation belongs in
+  ARCHITECTURE.md, and the header can point at it.
+- **Comments that restate the signature.** `-- Returns the plane's altitude` above
+  `function Plane:getAltitude()` adds nothing. Comment the non-obvious: units, frames of
+  reference, which side of the client/server boundary is expected to call it, why a
+  constant has the value it has.
+- **Self-congratulation and trivia.** No "elegantly handles", no "blazing fast", no
+  asides about the history of the technique or how the formula is derived. If a derivation
+  matters, cite it in one line and move on.
+- **The contrastive LLM cadence** — "this isn't X, it's Y", "not a bug, a feature",
+  "we don't just do X; we do Y". Say the thing once, directly. Same for the three-item
+  rhetorical list and for bolded one-line maxims.
+- **Change narration.** Comments like `-- now uses PlaneSim` or `-- updated to handle
+  crashes` describe a diff, and go stale immediately. Git has that information.
+
+Section banners (rows of `---` or `===` labelling regions of a file) are wanted, and are
+hand-written in several files. Match the style of the file you're in.
+
+Doc files follow the same rule. When you add to this file or ARCHITECTURE.md, add the
+shortest entry that carries the fact, and delete entries that are no longer true instead
+of qualifying them.
+
 ## Utility code
 
 Generic helpers belong in one place, `Core/Util`, so they get found and reused instead of
